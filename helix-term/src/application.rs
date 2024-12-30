@@ -557,7 +557,7 @@ impl Application {
                     })
             })
             .unwrap_or_else(|| editor.theme_loader.default_theme(true_color));
-        let _ = editor.set_theme(theme);
+        let _ = editor.set_theme(Arc::from(theme));
     }
 
     #[cfg(windows)]
