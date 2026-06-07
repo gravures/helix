@@ -2172,6 +2172,7 @@ dependencies = [
  "cassowary",
  "crossterm 0.28.1",
  "helix-core",
+ "helix-stdx",
  "helix-view",
  "log",
  "steel-core",
