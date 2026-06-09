@@ -1430,6 +1430,7 @@ pub enum ConfigEvent {
     Refresh,
     Update(Box<Config>),
     Change,
+    UpdateField(String, serde_json::Value),
     ThemeChanged,
 }
 
