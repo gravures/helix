@@ -12,3 +12,9 @@
     . (string
         (string_content) @injection.content))
   (#set! injection.language "regex"))
+
+((expression_statement (string (string_content) @injection.content))
+ (#set! injection.language "rst"))
+
+((expression_statement (assignment (string (string_content) @injection.content)))
+ (#set! injection.language "rst"))
