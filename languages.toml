@@ -210,6 +210,16 @@ command = "astro-ls"
 args = [ "--stdio" ]
 config = { typescript = { tsdk = "node_modules/typescript/lib" } }
 
+[language-server.mdx-lsp]
+command = "mdx-language-server"
+args = ["--stdio"]
+config.hostInfo = "helix"
+
+[language-server.mdx-lsp.config.typescript]
+tsdk = "node_modules/typescript/lib"
+environment = "node"
+enabled = true
+
 [language-server.lua-language-server]
 command = "lua-language-server"
 
@@ -2106,7 +2116,20 @@ source = { git = "https://codeberg.org/ficd/tree-sitter-mail", rev = "5eddbfdbec
 name = "markdown"
 scope = "source.md"
 injection-regex = "md|markdown"
-file-types = ["md", "livemd", "markdown", "mdx", "mkd", "mkdn", "mdwn", "mdown", "markdn", "mdtxt", "mdtext", "workbook", { glob = "PULLREQ_EDITMSG" }]
+file-types = [
+  "md",
+  "livemd",
+  "markdown",
+  "mkd",
+  "mkdn",
+  "mdwn",
+  "mdown",
+  "markdn",
+  "mdtxt",
+  "mdtext",
+  "workbook",
+  { glob = "PULLREQ_EDITMSG" },
+]
 roots = [".marksman.toml"]
 language-servers = [ "marksman", "markdown-oxide", "rumdl" ]
 indent = { tab-width = 2, unit = "  " }
@@ -2127,6 +2150,37 @@ word-completion.trigger-length = 4
 [[grammar]]
 name = "markdown"
 source = { git = "https://github.com/tree-sitter-grammars/tree-sitter-markdown", rev = "f969cd3ae3f9fbd4e43205431d0ae286014c05b5", subpath = "tree-sitter-markdown" }
+
+[[language]]
+name = "mdx"
+scope = "source.mdx"
+injection-regex = "mdx"
+file-types = ["mdx"]
+roots = ["rumdl.toml"]
+language-servers = [
+  { name = "mdx-lsp" },
+  { name = "rumdl" },
+  { name = "astro-ls" },
+]
+formatter = { command = "rumdl", args = ["check", "--fix", "--stdin"] }
+indent = { tab-width = 2, unit = "  " }
+block-comment-tokens = { start = "<!--", end = "-->" }
+word-completion.trigger-length = 4
+
+[language.auto-pairs]
+'(' = ')'
+'{' = '}'
+'[' = ']'
+'"' = '"'
+"'" = "'"
+'`' = '`'
+'‘' = '’'
+'«' = '»'
+'“' = '”'
+
+[[grammar]]
+name = "mdx"
+source = { git = "https://github.com/srazzak/tree-sitter-mdx.git", rev = "3aa29e8de1bf0213948a04fe953039b6ab73777b" }
 
 [[language]]
 name = "markdown-rustdoc"
