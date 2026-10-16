@@ -502,6 +502,24 @@ impl From<&WorkspaceTrustConfig> for helix_loader::workspace_trust::Config {
     }
 }
 
+impl Config {
+    pub fn code_action_hint(&self) -> bool {
+        self.gutters.layout.contains(&GutterType::CodeActionHint)
+            || self
+                .statusline
+                .left
+                .contains(&StatusLineElement::CodeActionHint)
+            || self
+                .statusline
+                .center
+                .contains(&StatusLineElement::CodeActionHint)
+            || self
+                .statusline
+                .right
+                .contains(&StatusLineElement::CodeActionHint)
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "kebab-case")]
 pub struct BufferPickerConfig {
@@ -794,6 +812,8 @@ pub enum StatusLineElement {
     #[cfg(feature = "steel")]
     #[serde(skip)]
     Custom(crate::extension::steel_implementations::CustomStatusElement),
+    /// Indicator for when code actions are available
+    CodeActionHint,
 }
 
 // Cursor shape is read and used on every rendered frame and so needs
@@ -901,6 +921,8 @@ pub enum GutterType {
     Spacer,
     /// Highlight local changes
     Diff,
+    /// Indicator for when code actions are available
+    CodeActionHint,
 }
 
 impl std::str::FromStr for GutterType {
@@ -912,6 +934,7 @@ impl std::str::FromStr for GutterType {
             "spacer" => Ok(Self::Spacer),
             "line-numbers" => Ok(Self::LineNumbers),
             "diff" => Ok(Self::Diff),
+            "code-action-hint" => Ok(Self::CodeActionHint),
             _ => anyhow::bail!(
                 "Gutter type can only be `diagnostics`, `spacer`, `line-numbers` or `diff`."
             ),
