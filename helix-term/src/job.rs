@@ -139,7 +139,10 @@ impl Jobs {
         match call {
             Ok(None) => None,
             Ok(Some(call)) => match call {
-                Callback::EditorCompositorJobs(call) => call(editor, compositor, self),
+                Callback::EditorCompositorJobs(call) => {
+                    call(editor, compositor, self);
+                    None
+                }
                 Callback::EditorCompositor(call) => {
                     call(editor, compositor);
                     None
@@ -156,7 +159,6 @@ impl Jobs {
             }
         }
     }
-
     pub fn handle_local_callback(
         &mut self,
         editor: &mut Editor,

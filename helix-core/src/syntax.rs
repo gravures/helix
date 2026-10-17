@@ -16,8 +16,8 @@ use config::{Configuration, FileType, LanguageConfiguration, LanguageServerConfi
 use foldhash::HashSet;
 use helix_loader::grammar::get_language;
 use helix_stdx::rope::RopeSliceExt as _;
+use once_cell::sync::OnceCell;
 use ropey::RopeSlice;
-use std::sync::OnceLock;
 use tree_house::{
     highlighter,
     query_iter::QueryIter,
@@ -39,11 +39,11 @@ pub use tree_house::{
 #[derive(Debug)]
 pub struct LanguageData {
     config: Arc<LanguageConfiguration>,
-    syntax: OnceLock<Option<SyntaxConfig>>,
-    indent_query: OnceLock<Option<IndentQuery>>,
-    textobject_query: OnceLock<Option<TextObjectQuery>>,
-    tag_query: OnceLock<Option<TagQuery>>,
-    rainbow_query: OnceLock<Option<RainbowQuery>>,
+    syntax: OnceCell<Option<SyntaxConfig>>,
+    indent_query: OnceCell<Option<IndentQuery>>,
+    textobject_query: OnceCell<Option<TextObjectQuery>>,
+    tag_query: OnceCell<Option<TagQuery>>,
+    rainbow_query: OnceCell<Option<RainbowQuery>>,
 }
 
 impl Clone for LanguageData {
@@ -63,14 +63,13 @@ impl LanguageData {
     fn new(config: LanguageConfiguration) -> Self {
         Self {
             config: Arc::new(config),
-            syntax: OnceLock::new(),
-            indent_query: OnceLock::new(),
-            textobject_query: OnceLock::new(),
-            tag_query: OnceLock::new(),
-            rainbow_query: OnceLock::new(),
+            syntax: OnceCell::new(),
+            indent_query: OnceCell::new(),
+            textobject_query: OnceCell::new(),
+            tag_query: OnceCell::new(),
+            rainbow_query: OnceCell::new(),
         }
     }
-
     pub fn config(&self) -> &Arc<LanguageConfiguration> {
         &self.config
     }

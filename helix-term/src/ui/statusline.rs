@@ -628,7 +628,8 @@ fn render_code_action_hint<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    if context.focused && context.doc.code_action_hints(context.view.id) {
+    let doc = get_doc(context);
+    if context.focused && doc.code_action_hints(context.view_id) {
         write(context, " ⋮ ".into())
     }
 }
