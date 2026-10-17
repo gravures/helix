@@ -10,11 +10,11 @@
 - clickable buffer line: [PR#12173](https://github.com/helix-editor/helix/pull/12173)
 - basics-icons: [PR#12369](https://github.com/helix-editor/helix/pull/12369)
 - vertical-buffer: [PR#13430](https://github.com/helix-editor/helix/pull/13430)
+- resizable windows/focus mode: [PR#8546](https://github.com/helix-editor/helix/pull/8546)
 
 ## REBASED
 
 - features/franky-theme
-- resizable windows/focus mode: [PR#8546](https://github.com/helix-editor/helix/pull/8546)
 - Steel plugin system [PR#8675](https://github.com/helix-editor/helix/pull/8675)
 
 ## TODO
