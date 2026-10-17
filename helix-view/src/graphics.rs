@@ -2,14 +2,58 @@ use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::{max, min},
+    fmt,
     str::FromStr,
 };
+
+#[must_use]
+const fn from_nibble(h: u8) -> u8 {
+    match h {
+        b'A'..=b'F' => h - b'A' + 10,
+        b'a'..=b'f' => h - b'a' + 10,
+        b'0'..=b'9' => h - b'0',
+        _ => 0xff, // Err
+    }
+}
+
+/// Decodes nibble, repeating its value on each half,
+/// i.e. the value is its own padding.
+///
+/// # Errors
+/// If `h` isn't a nibble
+#[must_use]
+const fn dupe_from_nibble(mut h: u8) -> Option<u8> {
+    h = from_nibble(h);
+    if h > 0xf {
+        return None;
+    }
+    Some((h << 4) | h)
+}
+
+/// Decodes big-endian nibble-pair.
+///
+/// # Errors
+/// If any byte isn't a nibble
+const fn byte_from_hex(mut h: [u8; 2]) -> Option<u8> {
+    // reuse memory
+    h[0] = from_nibble(h[0]);
+    h[1] = from_nibble(h[1]);
+    // we could split this in 2 `if`s,
+    // to avoid calling `from_nibble`,
+    // but that might be slower
+    if h[0] > 0xf || h[1] > 0xf {
+        return None;
+    }
+    Some((h[0] << 4) | h[1])
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 /// UNSTABLE
+#[derive(Default)]
 pub enum CursorKind {
     /// █
+    #[default]
     Block,
     /// |
     Bar,
@@ -19,68 +63,52 @@ pub enum CursorKind {
     Hidden,
 }
 
-impl Default for CursorKind {
-    fn default() -> Self {
-        Self::Block
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Margin {
-    pub left: u16,
-    pub right: u16,
-    pub top: u16,
-    pub bottom: u16,
+    pub horizontal: u16,
+    pub vertical: u16,
 }
 
 impl Margin {
     pub fn none() -> Self {
         Self {
-            left: 0,
-            right: 0,
-            top: 0,
-            bottom: 0,
+            horizontal: 0,
+            vertical: 0,
         }
     }
 
     /// Set uniform margin for all sides.
-    pub fn all(value: u16) -> Self {
+    pub const fn all(value: u16) -> Self {
         Self {
-            left: value,
-            right: value,
-            top: value,
-            bottom: value,
+            horizontal: value,
+            vertical: value,
         }
     }
 
     /// Set the margin of left and right sides to specified value.
-    pub fn horizontal(value: u16) -> Self {
+    pub const fn horizontal(value: u16) -> Self {
         Self {
-            left: value,
-            right: value,
-            top: 0,
-            bottom: 0,
+            horizontal: value,
+            vertical: 0,
         }
     }
 
     /// Set the margin of top and bottom sides to specified value.
-    pub fn vertical(value: u16) -> Self {
+    pub const fn vertical(value: u16) -> Self {
         Self {
-            left: 0,
-            right: 0,
-            top: value,
-            bottom: value,
+            horizontal: 0,
+            vertical: value,
         }
     }
 
     /// Get the total width of the margin (left + right)
-    pub fn width(&self) -> u16 {
-        self.left + self.right
+    pub const fn width(&self) -> u16 {
+        self.horizontal * 2
     }
 
     /// Get the total height of the margin (top + bottom)
-    pub fn height(&self) -> u16 {
-        self.top + self.bottom
+    pub const fn height(&self) -> u16 {
+        self.vertical * 2
     }
 }
 
@@ -181,13 +209,13 @@ impl Rect {
         Self::new(self.x, self.y, width, self.height)
     }
 
-    pub fn inner(self, margin: &Margin) -> Rect {
+    pub fn inner(self, margin: Margin) -> Rect {
         if self.width < margin.width() || self.height < margin.height() {
             Rect::default()
         } else {
             Rect {
-                x: self.x + margin.left,
-                y: self.y + margin.top,
+                x: self.x + margin.horizontal,
+                y: self.y + margin.vertical,
                 width: self.width - margin.width(),
                 height: self.height - margin.height(),
             }
@@ -273,7 +301,100 @@ pub enum Color {
     Indexed(u8),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MalformedHex {
+    NoHash,
+    LenOOB,
+    NotANibble,
+}
+impl fmt::Display for MalformedHex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Malformed hex color code: {}",
+            match self {
+                Self::NoHash => "Missing hash prefix",
+                Self::LenOOB => "Must be 12 or 24 bit RGB",
+                Self::NotANibble => "One or more chars is not hex digit (nibble)",
+            }
+        )
+    }
+}
+
+impl Color {
+    /// Creates a `Color` from a hex string of the form
+    /// "#RRGGBB" or "#RGB"
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use helix_view::theme::Color;
+    ///
+    /// let color1 = Color::from_hex("#c0ffee").unwrap();
+    /// let color2 = Color::Rgb(192, 255, 238);
+    ///
+    /// assert_eq!(color1, color2);
+    ///
+    /// let color3 = Color::from_hex("#012").unwrap();
+    /// assert_eq!(color3, Color::Rgb(0, 17, 34));
+    /// ```
+    pub fn from_hex(h: &str) -> Result<Self, MalformedHex> {
+        let h = h.as_bytes();
+        if !h.starts_with(b"#") {
+            return Err(MalformedHex::NoHash);
+        }
+
+        use byte_from_hex as pair;
+        use dupe_from_nibble as nibble;
+
+        match h.len() {
+            7 => match (|| {
+                Some(Self::Rgb(
+                    pair([h[1], h[2]])?,
+                    pair([h[3], h[4]])?,
+                    pair([h[5], h[6]])?,
+                ))
+            })() {
+                Some(c) => Ok(c),
+                None => Err(MalformedHex::NotANibble),
+            },
+            4 => match (|| Some(Self::Rgb(nibble(h[1])?, nibble(h[2])?, nibble(h[3])?)))() {
+                Some(c) => Ok(c),
+                None => Err(MalformedHex::NotANibble),
+            },
+            _ => Err(MalformedHex::LenOOB),
+        }
+    }
+}
+
 #[cfg(feature = "term")]
+impl From<Color> for termina::style::ColorSpec {
+    fn from(color: Color) -> Self {
+        match color {
+            Color::Reset => Self::Reset,
+            Color::Black => Self::BLACK,
+            Color::Red => Self::RED,
+            Color::Green => Self::GREEN,
+            Color::Yellow => Self::YELLOW,
+            Color::Blue => Self::BLUE,
+            Color::Magenta => Self::MAGENTA,
+            Color::Cyan => Self::CYAN,
+            Color::Gray => Self::BRIGHT_BLACK,
+            Color::White => Self::BRIGHT_WHITE,
+            Color::LightRed => Self::BRIGHT_RED,
+            Color::LightGreen => Self::BRIGHT_GREEN,
+            Color::LightBlue => Self::BRIGHT_BLUE,
+            Color::LightYellow => Self::BRIGHT_YELLOW,
+            Color::LightMagenta => Self::BRIGHT_MAGENTA,
+            Color::LightCyan => Self::BRIGHT_CYAN,
+            Color::LightGray => Self::WHITE,
+            Color::Indexed(i) => Self::PaletteIndex(i),
+            Color::Rgb(r, g, b) => termina::style::RgbColor::new(r, g, b).into(),
+        }
+    }
+}
+
+#[cfg(all(feature = "term", windows))]
 impl From<Color> for crossterm::style::Color {
     fn from(color: Color) -> Self {
         use crossterm::style::Color as CColor;
@@ -301,7 +422,6 @@ impl From<Color> for crossterm::style::Color {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnderlineStyle {
     Reset,
@@ -327,6 +447,21 @@ impl FromStr for UnderlineStyle {
     }
 }
 
+#[cfg(feature = "term")]
+impl From<UnderlineStyle> for termina::style::Underline {
+    fn from(style: UnderlineStyle) -> Self {
+        match style {
+            UnderlineStyle::Reset => Self::None,
+            UnderlineStyle::Line => Self::Single,
+            UnderlineStyle::Curl => Self::Curly,
+            UnderlineStyle::Dotted => Self::Dotted,
+            UnderlineStyle::Dashed => Self::Dashed,
+            UnderlineStyle::DoubleLine => Self::Double,
+        }
+    }
+}
+
+#[cfg(all(feature = "term", windows))]
 impl From<UnderlineStyle> for crossterm::style::Attribute {
     fn from(style: UnderlineStyle) -> Self {
         match style {
@@ -459,7 +594,13 @@ pub struct Style {
 }
 
 impl Default for Style {
-    fn default() -> Style {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Style {
+    pub const fn new() -> Self {
         Style {
             fg: None,
             bg: None,
@@ -469,12 +610,10 @@ impl Default for Style {
             sub_modifier: Modifier::empty(),
         }
     }
-}
 
-impl Style {
     /// Returns a `Style` resetting all properties.
-    pub fn reset() -> Style {
-        Style {
+    pub const fn reset() -> Self {
+        Self {
             fg: Some(Color::Reset),
             bg: Some(Color::Reset),
             underline_color: None,
@@ -494,7 +633,7 @@ impl Style {
     /// let diff = Style::default().fg(Color::Red);
     /// assert_eq!(style.patch(diff), Style::default().fg(Color::Red));
     /// ```
-    pub fn fg(mut self, color: Color) -> Style {
+    pub const fn fg(mut self, color: Color) -> Style {
         self.fg = Some(color);
         self
     }
@@ -509,7 +648,7 @@ impl Style {
     /// let diff = Style::default().bg(Color::Red);
     /// assert_eq!(style.patch(diff), Style::default().bg(Color::Red));
     /// ```
-    pub fn bg(mut self, color: Color) -> Style {
+    pub const fn bg(mut self, color: Color) -> Style {
         self.bg = Some(color);
         self
     }
@@ -524,7 +663,7 @@ impl Style {
     /// let diff = Style::default().underline_color(Color::Red);
     /// assert_eq!(style.patch(diff), Style::default().underline_color(Color::Red));
     /// ```
-    pub fn underline_color(mut self, color: Color) -> Style {
+    pub const fn underline_color(mut self, color: Color) -> Style {
         self.underline_color = Some(color);
         self
     }
@@ -539,7 +678,7 @@ impl Style {
     /// let diff = Style::default().underline_style(UnderlineStyle::Curl);
     /// assert_eq!(style.patch(diff), Style::default().underline_style(UnderlineStyle::Curl));
     /// ```
-    pub fn underline_style(mut self, style: UnderlineStyle) -> Style {
+    pub const fn underline_style(mut self, style: UnderlineStyle) -> Style {
         self.underline_style = Some(style);
         self
     }
@@ -697,6 +836,85 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn sanity_nibble_lowercase() {
+        for i in 0..0x10_u8 {
+            let c = format!("{:x}", i);
+            assert_eq!(c.len(), 1);
+            assert_eq!(
+                u8::from_str_radix(&c, 0x10).unwrap(),
+                from_nibble(c.as_bytes()[0])
+            );
+        }
+    }
+    #[test]
+    fn sanity_nibble_uppercase() {
+        for i in 0..0x10_u8 {
+            let c = format!("{:X}", i);
+            assert_eq!(c.len(), 1);
+            assert_eq!(
+                u8::from_str_radix(&c, 0x10).unwrap(),
+                from_nibble(c.as_bytes()[0])
+            );
+        }
+    }
+
+    #[test]
+    fn sanity_nibble2() {
+        assert_eq!(dupe_from_nibble(b'0'), Some(0));
+        assert_eq!(dupe_from_nibble(b'1'), Some(0x11));
+        assert_eq!(dupe_from_nibble(b'7'), Some(0x77));
+        assert_eq!(dupe_from_nibble(b'a'), Some(0xaa));
+        assert_eq!(dupe_from_nibble(b'f'), Some(0xff));
+    }
+
+    #[test]
+    fn invalid_nibble() {
+        for c in *b"gGzZ+-" {
+            assert_eq!(from_nibble(c), 0xff);
+        }
+    }
+
+    #[test]
+    fn pair_endian() {
+        assert_eq!(byte_from_hex(*b"00"), Some(0));
+        assert_eq!(byte_from_hex(*b"fF"), Some(0xff));
+        assert_eq!(byte_from_hex(*b"c3"), Some(0xc3));
+    }
+    #[test]
+    fn invalid_pair() {
+        assert!(byte_from_hex(*b"+1").is_none());
+        assert!(byte_from_hex(*b"-1").is_none());
+        assert!(byte_from_hex(*b"Gg").is_none());
+        assert!(byte_from_hex(*b"0x").is_none());
+    }
+
+    #[test]
+    fn hex_color_no_regress() {
+        assert_eq!(Color::from_hex("#+a+b+c"), Err(MalformedHex::NotANibble));
+        assert_eq!(Color::from_hex("#+0+1+2"), Err(MalformedHex::NotANibble));
+    }
+    #[test]
+    fn hex_color_sanity() {
+        assert_eq!(Color::from_hex("#01fe3a"), Ok(Color::Rgb(0x01, 0xfe, 0x3a)));
+        assert_eq!(Color::from_hex("#abc"), Ok(Color::Rgb(0xaa, 0xbb, 0xcc)));
+    }
+    #[test]
+    fn hex_color_invalid_len() {
+        for h in [
+            "#0",
+            "#00",
+            "#0000",
+            "#00000",
+            "#0000000",
+            "#00000000",
+            "#000000000",
+            "#0000000000",
+        ] {
+            assert_eq!(Color::from_hex(h), Err(MalformedHex::LenOOB));
         }
     }
 }

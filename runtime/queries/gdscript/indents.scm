@@ -6,6 +6,7 @@
   (pattern_section)
 
   (function_definition)
+  (lambda)
   (constructor_definition)
   (class_definition)
   (enum_definition)
@@ -33,3 +34,13 @@
   (pass_statement)
 ] @extend.prevent-once
 
+
+[
+  ")"
+  "]"
+  "}"
+] @outdent
+(elif_clause
+  "elif" @outdent)
+(else_clause
+  "else" @outdent)

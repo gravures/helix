@@ -14,6 +14,7 @@
 (attribute_call (identifier) @function)
 (base_call (identifier) @function)
 (call (identifier) @function)
+(lambda (name) @function)
 
 ; Function definitions
 
@@ -33,10 +34,7 @@
 (binary_operator (identifier) @type)
 (enum_definition (name) @type.enum)
 (enumerator (identifier) @type.enum.variant)
-[
-  (null)
-  (underscore)
-] @type.builtin
+(underscore) @type.builtin
 
 
 (variable_statement (identifier) @variable)
@@ -62,6 +60,7 @@
   (true)
   (false)
 ] @constant.builtin.boolean
+(null) @constant.builtin
 
 [
   "+"
@@ -88,6 +87,7 @@
   "<<"
   ">>"
   ":="
+  ":"
 ] @operator
 
 (annotation (identifier) @keyword.storage.modifier)
@@ -97,6 +97,7 @@
   "else"
   "elif"
   "match"
+  "when"
 ] @keyword.control.conditional
 
 [
@@ -113,7 +114,7 @@
 
 [
   "func"
-] @keyword.control.function
+] @keyword.function
 
 [
   "export"

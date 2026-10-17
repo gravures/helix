@@ -23,7 +23,7 @@ A function call might be parsed by tree-sitter into a tree like the following.
 Use `:tree-sitter-subtree` to view the syntax tree of the primary selection. In
 a more intuitive tree format:
 
-```
+```text
             ┌────┐
             │call│
       ┌─────┴────┴─────┐
@@ -64,5 +64,3 @@ element. As a result, using `Alt-p` with a selection on `arg1` will move the
 selection to the "func" `identifier`.
 
 [lang-support]: ./lang-support.md
-[unimpaired-keybinds]: ./keymap.md#unimpaired
-[tree-sitter-nav-demo]: https://user-images.githubusercontent.com/23398472/152332550-7dfff043-36a2-4aec-b8f2-77c13eb56d6f.gif

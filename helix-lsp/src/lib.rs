@@ -2,19 +2,19 @@ mod client;
 pub mod file_event;
 mod file_operations;
 pub mod jsonrpc;
-pub mod snippet;
 mod transport;
 
 use arc_swap::ArcSwap;
 pub use client::Client;
 pub use futures_executor::block_on;
+pub use helix_lsp_types as lsp;
 pub use jsonrpc::Call;
+use log::warn;
 pub use lsp::{Position, Url};
-pub use lsp_types as lsp;
 
 use futures_util::stream::select_all::SelectAll;
-use helix_core::syntax::{
-    LanguageConfiguration, LanguageServerConfiguration, LanguageServerFeatures,
+use helix_core::syntax::config::{
+    LanguageConfiguration, LanguageServerConfiguration, LanguageServerFeatures, RootMarkers,
 };
 use helix_stdx::path;
 use slotmap::SlotMap;
@@ -22,6 +22,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use std::{
     collections::HashMap,
+    fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -38,7 +39,7 @@ pub enum Error {
     #[error("protocol error: {0}")]
     Rpc(#[from] jsonrpc::Error),
     #[error("failed to parse: {0}")]
-    Parse(#[from] serde_json::Error),
+    Parse(Box<dyn std::error::Error + Send + Sync>),
     #[error("IO Error: {0}")]
     IO(#[from] std::io::Error),
     #[error("request {0} timed out")]
@@ -51,6 +52,18 @@ pub enum Error {
     ExecutableNotFound(#[from] helix_stdx::env::ExecutableNotFoundError),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(value: serde_json::Error) -> Self {
+        Self::Parse(Box::new(value))
+    }
+}
+
+impl From<sonic_rs::Error> for Error {
+    fn from(value: sonic_rs::Error) -> Self {
+        Self::Parse(Box::new(value))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -67,7 +80,8 @@ pub enum OffsetEncoding {
 pub mod util {
     use super::*;
     use helix_core::line_ending::{line_end_byte_index, line_end_char_index};
-    use helix_core::{chars, RopeSlice, SmallVec};
+    use helix_core::snippets::{RenderedSnippet, Snippet, SnippetRenderCtx};
+    use helix_core::{chars, RopeSlice};
     use helix_core::{diagnostic::NumberOrString, Range, Rope, Selection, Tendril, Transaction};
 
     /// Converts a diagnostic in the document to [`lsp::Diagnostic`].
@@ -284,10 +298,8 @@ pub mod util {
         if replace_mode {
             end += text
                 .chars_at(cursor)
-                .skip(1)
                 .take_while(|ch| chars::char_is_word(*ch))
-                .count()
-                + 1;
+                .count();
         }
         (start, end)
     }
@@ -357,25 +369,17 @@ pub mod util {
         transaction.with_selection(selection)
     }
 
-    /// Creates a [Transaction] from the [snippet::Snippet] in a completion response.
+    /// Creates a [Transaction] from the [Snippet] in a completion response.
     /// The transaction applies the edit to all cursors.
-    #[allow(clippy::too_many_arguments)]
     pub fn generate_transaction_from_snippet(
         doc: &Rope,
         selection: &Selection,
         edit_offset: Option<(i128, i128)>,
         replace_mode: bool,
-        snippet: snippet::Snippet,
-        line_ending: &str,
-        include_placeholder: bool,
-        tab_width: usize,
-        indent_width: usize,
-    ) -> Transaction {
+        snippet: Snippet,
+        cx: &mut SnippetRenderCtx,
+    ) -> (Transaction, RenderedSnippet) {
         let text = doc.slice(..);
-
-        let mut off = 0i128;
-        let mut mapped_doc = doc.clone();
-        let mut selection_tabstops: SmallVec<[_; 1]> = SmallVec::new();
         let (removed_start, removed_end) = completion_range(
             text,
             edit_offset,
@@ -384,8 +388,7 @@ pub mod util {
         )
         .expect("transaction must be valid for primary selection");
         let removed_text = text.slice(removed_start..removed_end);
-
-        let (transaction, mut selection) = Transaction::change_by_selection_ignore_overlapping(
+        let (transaction, mapped_selection, snippet) = snippet.render(
             doc,
             selection,
             |range| {
@@ -394,108 +397,15 @@ pub mod util {
                     .filter(|(start, end)| text.slice(start..end) == removed_text)
                     .unwrap_or_else(|| find_completion_range(text, replace_mode, cursor))
             },
-            |replacement_start, replacement_end| {
-                let mapped_replacement_start = (replacement_start as i128 + off) as usize;
-                let mapped_replacement_end = (replacement_end as i128 + off) as usize;
-
-                let line_idx = mapped_doc.char_to_line(mapped_replacement_start);
-                let indent_level = helix_core::indent::indent_level_for_line(
-                    mapped_doc.line(line_idx),
-                    tab_width,
-                    indent_width,
-                ) * indent_width;
-
-                let newline_with_offset = format!(
-                    "{line_ending}{blank:indent_level$}",
-                    line_ending = line_ending,
-                    blank = ""
-                );
-
-                let (replacement, tabstops) =
-                    snippet::render(&snippet, &newline_with_offset, include_placeholder);
-                selection_tabstops.push((mapped_replacement_start, tabstops));
-                mapped_doc.remove(mapped_replacement_start..mapped_replacement_end);
-                mapped_doc.insert(mapped_replacement_start, &replacement);
-                off +=
-                    replacement_start as i128 - replacement_end as i128 + replacement.len() as i128;
-
-                Some(replacement)
-            },
+            cx,
         );
-
-        let changes = transaction.changes();
-        if changes.is_empty() {
-            return transaction;
-        }
-
-        // Don't normalize to avoid merging/reording selections which would
-        // break the association between tabstops and selections. Most ranges
-        // will be replaced by tabstops anyways and the final selection will be
-        // normalized anyways
-        selection = selection.map_no_normalize(changes);
-        let mut mapped_selection = SmallVec::with_capacity(selection.len());
-        let mut mapped_primary_idx = 0;
-        let primary_range = selection.primary();
-        for (range, (tabstop_anchor, tabstops)) in selection.into_iter().zip(selection_tabstops) {
-            if range == primary_range {
-                mapped_primary_idx = mapped_selection.len()
-            }
-
-            let tabstops = tabstops.first().filter(|tabstops| !tabstops.is_empty());
-            let Some(tabstops) = tabstops else {
-                // no tabstop normal mapping
-                mapped_selection.push(range);
-                continue;
-            };
-
-            // expand the selection to cover the tabstop to retain the helix selection semantic
-            // the tabstop closest to the range simply replaces `head` while anchor remains in place
-            // the remaining tabstops receive their own single-width cursor
-            if range.head < range.anchor {
-                let last_idx = tabstops.len() - 1;
-                let last_tabstop = tabstop_anchor + tabstops[last_idx].0;
-
-                // if selection is forward but was moved to the right it is
-                // contained entirely in the replacement text, just do a point
-                // selection (fallback below)
-                if range.anchor > last_tabstop {
-                    let range = Range::new(range.anchor, last_tabstop);
-                    mapped_selection.push(range);
-                    let rem_tabstops = tabstops[..last_idx]
-                        .iter()
-                        .map(|tabstop| Range::point(tabstop_anchor + tabstop.0));
-                    mapped_selection.extend(rem_tabstops);
-                    continue;
-                }
-            } else {
-                let first_tabstop = tabstop_anchor + tabstops[0].0;
-
-                // if selection is forward but was moved to the right it is
-                // contained entirely in the replacement text, just do a point
-                // selection (fallback below)
-                if range.anchor < first_tabstop {
-                    // we can't properly compute the the next grapheme
-                    // here because the transaction hasn't been applied yet
-                    // that is not a problem because the range gets grapheme aligned anyway
-                    // tough so just adding one will always cause head to be grapheme
-                    // aligned correctly when applied to the document
-                    let range = Range::new(range.anchor, first_tabstop + 1);
-                    mapped_selection.push(range);
-                    let rem_tabstops = tabstops[1..]
-                        .iter()
-                        .map(|tabstop| Range::point(tabstop_anchor + tabstop.0));
-                    mapped_selection.extend(rem_tabstops);
-                    continue;
-                }
-            };
-
-            let tabstops = tabstops
-                .iter()
-                .map(|tabstop| Range::point(tabstop_anchor + tabstop.0));
-            mapped_selection.extend(tabstops);
-        }
-
-        transaction.with_selection(Selection::new(mapped_selection, mapped_primary_idx))
+        let transaction = transaction.with_selection(snippet.first_selection(
+            // we keep the direction of the old primary selection in case it changed during mapping
+            // but use the primary idx from the mapped selection in case ranges had to be merged
+            selection.primary().direction(),
+            mapped_selection.primary_index(),
+        ));
+        (transaction, snippet)
     }
 
     pub fn generate_transaction_from_edits(
@@ -505,7 +415,7 @@ pub mod util {
     ) -> Transaction {
         // Sort edits by start range, since some LSPs (Omnisharp) send them
         // in reverse order.
-        edits.sort_unstable_by_key(|edit| edit.range.start);
+        edits.sort_by_key(|edit| edit.range.start);
 
         // Generate a diff if the edit is a full document replacement.
         #[allow(clippy::collapsible_if)]
@@ -521,40 +431,49 @@ pub mod util {
             }
         }
 
-        Transaction::change(
-            doc,
-            edits.into_iter().map(|edit| {
-                // simplify "" into None for cleaner changesets
-                let replacement = if !edit.new_text.is_empty() {
-                    Some(edit.new_text.into())
-                } else {
-                    None
-                };
+        // `ChangeSet::from_changes` requires its changes to be sorted and
+        // non-overlapping (it does `retain(from - last)`, which underflows when
+        // `from < last`). The sort above handles ordering, but the LSP spec
+        // already forbids overlapping edits and some servers violate that. So
+        // resolve the edits here and drop any that overlap an earlier one (or
+        // fail to map), instead of feeding an overlap into `from_changes` and
+        // panicking. This matches the overlap policy of `Transaction::delete`.
+        // See issue #15514 / AUDIT-044/045.
+        let mut last_end = 0;
+        let mut changes: Vec<(usize, usize, Option<helix_core::Tendril>)> =
+            Vec::with_capacity(edits.len());
+        for edit in edits {
+            let Some(start) = lsp_pos_to_pos(doc, edit.range.start, offset_encoding) else {
+                continue;
+            };
+            let Some(end) = lsp_pos_to_pos(doc, edit.range.end, offset_encoding) else {
+                continue;
+            };
 
-                let start =
-                    if let Some(start) = lsp_pos_to_pos(doc, edit.range.start, offset_encoding) {
-                        start
-                    } else {
-                        return (0, 0, None);
-                    };
-                let end = if let Some(end) = lsp_pos_to_pos(doc, edit.range.end, offset_encoding) {
-                    end
-                } else {
-                    return (0, 0, None);
-                };
+            if start > end {
+                log::error!("Invalid LSP text edit start {start:?} > end {end:?}, discarding");
+                continue;
+            }
 
-                if start > end {
-                    log::error!(
-                        "Invalid LSP text edit start {:?} > end {:?}, discarding",
-                        start,
-                        end
-                    );
-                    return (0, 0, None);
-                }
+            if start < last_end {
+                log::error!(
+                    "Overlapping LSP text edit {start}..{end} (after {last_end}), discarding"
+                );
+                continue;
+            }
+            last_end = end;
 
-                (start, end, replacement)
-            }),
-        )
+            // simplify "" into None for cleaner changesets
+            let replacement = if edit.new_text.is_empty() {
+                None
+            } else {
+                Some(edit.new_text.into())
+            };
+
+            changes.push((start, end, replacement));
+        }
+
+        Transaction::change(doc, changes.into_iter())
     }
 }
 
@@ -567,6 +486,8 @@ pub enum MethodCall {
     RegisterCapability(lsp::RegistrationParams),
     UnregisterCapability(lsp::UnregistrationParams),
     ShowDocument(lsp::ShowDocumentParams),
+    WorkspaceDiagnosticRefresh,
+    ShowMessageRequest(lsp::ShowMessageRequestParams),
 }
 
 impl MethodCall {
@@ -597,6 +518,11 @@ impl MethodCall {
             lsp::request::ShowDocument::METHOD => {
                 let params: lsp::ShowDocumentParams = params.parse()?;
                 Self::ShowDocument(params)
+            }
+            lsp::request::WorkspaceDiagnosticRefresh::METHOD => Self::WorkspaceDiagnosticRefresh,
+            lsp::request::ShowMessageRequest::METHOD => {
+                let params: lsp::ShowMessageRequestParams = params.parse()?;
+                Self::ShowMessageRequest(params)
             }
             _ => {
                 return Err(Error::Unhandled);
@@ -677,8 +603,8 @@ impl Registry {
 
     pub fn remove_by_id(&mut self, id: LanguageServerId) {
         let Some(client) = self.inner.remove(id) else {
-            log::error!("client was already removed");
-            return
+            log::debug!("client was already removed");
+            return;
         };
         self.file_event_handler.remove_client(id);
         let instances = self
@@ -695,7 +621,7 @@ impl Registry {
         &mut self,
         name: String,
         ls_config: &LanguageConfiguration,
-        doc_path: Option<&std::path::PathBuf>,
+        doc_path: Option<&std::path::Path>,
         root_dirs: &[PathBuf],
         enable_snippets: bool,
     ) -> Result<Arc<Client>, StartupError> {
@@ -722,56 +648,56 @@ impl Registry {
         Ok(self.inner[id].clone())
     }
 
-    /// If this method is called, all documents that have a reference to language servers used by the language config have to refresh their language servers,
-    /// as it could be that language servers of these documents were stopped by this method.
+    /// If this method is called, all documents that have a reference to the language server have to refresh their language servers,
     /// See helix_view::editor::Editor::refresh_language_servers
-    pub fn restart(
+    pub fn restart_server(
         &mut self,
+        name: &str,
         language_config: &LanguageConfiguration,
-        doc_path: Option<&std::path::PathBuf>,
+        doc_path: Option<&std::path::Path>,
         root_dirs: &[PathBuf],
         enable_snippets: bool,
-    ) -> Result<Vec<Arc<Client>>> {
-        language_config
-            .language_servers
-            .iter()
-            .filter_map(|LanguageServerFeatures { name, .. }| {
-                if let Some(old_clients) = self.inner_by_name.remove(name) {
-                    for old_client in old_clients {
-                        self.file_event_handler.remove_client(old_client.id());
-                        self.inner.remove(old_client.id());
-                        tokio::spawn(async move {
-                            let _ = old_client.force_shutdown().await;
-                        });
-                    }
-                }
-                let client = match self.start_client(
-                    name.clone(),
-                    language_config,
-                    doc_path,
-                    root_dirs,
-                    enable_snippets,
-                ) {
-                    Ok(client) => client,
-                    Err(StartupError::NoRequiredRootFound) => return None,
-                    Err(StartupError::Error(err)) => return Some(Err(err)),
-                };
-                self.inner_by_name
-                    .insert(name.to_owned(), vec![client.clone()]);
+    ) -> Option<Result<Arc<Client>>> {
+        if let Some(old_clients) = self.inner_by_name.remove(name) {
+            if old_clients.is_empty() {
+                log::info!("restarting client for '{name}' which was manually stopped");
+            } else {
+                log::info!("stopping existing clients for '{name}'");
+            }
+            for old_client in old_clients {
+                self.file_event_handler.remove_client(old_client.id());
+                self.inner.remove(old_client.id());
+                old_client.force_shutdown();
+            }
+        }
+        let client = match self.start_client(
+            name.to_string(),
+            language_config,
+            doc_path,
+            root_dirs,
+            enable_snippets,
+        ) {
+            Ok(client) => client,
+            Err(StartupError::NoRequiredRootFound) => return None,
+            Err(StartupError::Error(err)) => return Some(Err(err)),
+        };
+        self.inner_by_name
+            .insert(name.to_owned(), vec![client.clone()]);
 
-                Some(Ok(client))
-            })
-            .collect()
+        Some(Ok(client))
     }
 
     pub fn stop(&mut self, name: &str) {
-        if let Some(clients) = self.inner_by_name.remove(name) {
-            for client in clients {
+        if let Some(clients) = self.inner_by_name.get_mut(name) {
+            // Drain the clients vec so that the entry in `inner_by_name` remains
+            // empty. We use the empty vec as a "tombstone" to mean that a server
+            // has been manually stopped with :lsp-stop and shouldn't be automatically
+            // restarted by `get`. :lsp-restart can be used to restart the server
+            // manually.
+            for client in clients.drain(..) {
                 self.file_event_handler.remove_client(client.id());
                 self.inner.remove(client.id());
-                tokio::spawn(async move {
-                    let _ = client.force_shutdown().await;
-                });
+                client.force_shutdown();
             }
         }
     }
@@ -779,15 +705,27 @@ impl Registry {
     pub fn get<'a>(
         &'a mut self,
         language_config: &'a LanguageConfiguration,
-        doc_path: Option<&'a std::path::PathBuf>,
+        doc_path: Option<&'a std::path::Path>,
         root_dirs: &'a [PathBuf],
         enable_snippets: bool,
     ) -> impl Iterator<Item = (LanguageServerName, Result<Arc<Client>>)> + 'a {
         language_config.language_servers.iter().filter_map(
             move |LanguageServerFeatures { name, .. }| {
                 if let Some(clients) = self.inner_by_name.get(name) {
+                    // If the clients vec is empty, do not automatically start a client
+                    // for this server. The empty vec is a tombstone left to mean that a
+                    // server has been manually stopped and shouldn't be started automatically.
+                    // See `stop`.
+                    if clients.is_empty() {
+                        return None;
+                    }
+
                     if let Some((_, client)) = clients.iter().enumerate().find(|(i, client)| {
-                        client.try_add_doc(&language_config.roots, root_dirs, doc_path, *i == 0)
+                        let manual_roots = language_config
+                            .workspace_lsp_roots
+                            .as_deref()
+                            .unwrap_or(root_dirs);
+                        client.try_add_doc(&language_config.roots, manual_roots, doc_path, *i == 0)
                     }) {
                         return Some((name.to_owned(), Ok(client.clone())));
                     }
@@ -821,14 +759,17 @@ impl Registry {
 #[derive(Debug)]
 pub enum ProgressStatus {
     Created,
-    Started(lsp::WorkDoneProgress),
+    Started {
+        title: String,
+        progress: lsp::WorkDoneProgress,
+    },
 }
 
 impl ProgressStatus {
     pub fn progress(&self) -> Option<&lsp::WorkDoneProgress> {
         match &self {
             ProgressStatus::Created => None,
-            ProgressStatus::Started(progress) => Some(progress),
+            ProgressStatus::Started { title: _, progress } => Some(progress),
         }
     }
 }
@@ -865,6 +806,13 @@ impl LspProgressMap {
         self.0.get(&id).and_then(|values| values.get(token))
     }
 
+    pub fn title(&self, id: LanguageServerId, token: &lsp::ProgressToken) -> Option<&String> {
+        self.progress(id, token).and_then(|p| match p {
+            ProgressStatus::Created => None,
+            ProgressStatus::Started { title, .. } => Some(title),
+        })
+    }
+
     /// Checks if progress `token` for server with `id` is created.
     pub fn is_created(&mut self, id: LanguageServerId, token: &lsp::ProgressToken) -> bool {
         self.0
@@ -889,17 +837,39 @@ impl LspProgressMap {
         self.0.get_mut(&id).and_then(|vals| vals.remove(token))
     }
 
-    /// Updates the progress of `token` for server with `id` to `status`, returns the value replaced or `None`.
+    /// Updates the progress of `token` for server with `id` to begin state `status`
+    pub fn begin(
+        &mut self,
+        id: LanguageServerId,
+        token: lsp::ProgressToken,
+        status: lsp::WorkDoneProgressBegin,
+    ) {
+        self.0.entry(id).or_default().insert(
+            token,
+            ProgressStatus::Started {
+                title: status.title.clone(),
+                progress: lsp::WorkDoneProgress::Begin(status),
+            },
+        );
+    }
+
+    /// Updates the progress of `token` for server with `id` to report state `status`.
     pub fn update(
         &mut self,
         id: LanguageServerId,
         token: lsp::ProgressToken,
-        status: lsp::WorkDoneProgress,
-    ) -> Option<ProgressStatus> {
+        status: lsp::WorkDoneProgressReport,
+    ) {
         self.0
             .entry(id)
             .or_default()
-            .insert(token, ProgressStatus::Started(status))
+            .entry(token)
+            .and_modify(|e| match e {
+                ProgressStatus::Created => (),
+                ProgressStatus::Started { progress, .. } => {
+                    *progress = lsp::WorkDoneProgress::Report(status)
+                }
+            });
     }
 }
 
@@ -923,7 +893,7 @@ fn start_client(
     name: String,
     config: &LanguageConfiguration,
     ls_config: &LanguageServerConfiguration,
-    doc_path: Option<&std::path::PathBuf>,
+    doc_path: Option<&std::path::Path>,
     root_dirs: &[PathBuf],
     enable_snippets: bool,
 ) -> Result<NewClient, StartupError> {
@@ -951,6 +921,8 @@ fn start_client(
             .map(|entry| entry.file_name())
             .any(|entry| globset.is_match(entry))
         {
+            // TODO: also show the globset that should be matched: https://github.com/BurntSushi/ripgrep/issues/3274
+            warn!("The lsp {name:?} tried to start at {root_path:?} but failed to match it's 'required_root_patterns'");
             return Err(StartupError::NoRequiredRootFound);
         }
     }
@@ -959,7 +931,7 @@ fn start_client(
         &ls_config.command,
         &ls_config.args,
         ls_config.config.clone(),
-        ls_config.environment.clone(),
+        &ls_config.environment,
         root_path,
         root_uri,
         id,
@@ -988,17 +960,7 @@ fn start_client(
         }
 
         // next up, notify<initialized>
-        let notification_result = _client
-            .notify::<lsp::notification::Initialized>(lsp::InitializedParams {})
-            .await;
-
-        if let Err(e) = notification_result {
-            log::error!(
-                "failed to notify language server of its initialization: {}",
-                e
-            );
-            return;
-        }
+        _client.notify::<lsp::notification::Initialized>(lsp::InitializedParams {});
 
         initialize_notify.notify_one();
     });
@@ -1017,7 +979,7 @@ fn start_client(
 /// * If we stopped at `workspace` instead and `workspace_is_cwd == true` return `workspace`
 pub fn find_lsp_workspace(
     file: &str,
-    root_markers: &[String],
+    root_markers: &RootMarkers,
     root_dirs: &[PathBuf],
     workspace: &Path,
     workspace_is_cwd: bool,
@@ -1037,10 +999,16 @@ pub fn find_lsp_workspace(
 
     let mut top_marker = None;
     for ancestor in file.ancestors() {
-        if root_markers
-            .iter()
-            .any(|marker| ancestor.join(marker).exists())
-        {
+        let Ok(mut dir) = fs::read_dir(ancestor) else {
+            continue;
+        };
+
+        if dir.any(|entry| {
+            if let Ok(entry) = entry {
+                return root_markers.is_match(entry.file_name());
+            }
+            false
+        }) {
             top_marker = Some(ancestor);
         }
 
@@ -1097,7 +1065,7 @@ mod tests {
 
     #[test]
     fn emoji_format_gh_4791() {
-        use lsp_types::{Position, Range, TextEdit};
+        use lsp::{Position, Range, TextEdit};
 
         let edits = vec![
             TextEdit {
@@ -1130,7 +1098,57 @@ mod tests {
 
         let mut source = Rope::from_str("[\n\"🇺🇸\",\n\"🎄\",\n]");
 
-        let transaction = generate_transaction_from_edits(&source, edits, OffsetEncoding::Utf8);
+        let transaction = generate_transaction_from_edits(&source, edits, OffsetEncoding::Utf16);
         assert!(transaction.apply(&mut source));
+        assert_eq!(source, "[\n  \"🇺🇸\",\n  \"🎄\",\n]");
+    }
+
+    #[test]
+    fn overlapping_edits_are_dropped() {
+        // Regression for issue #15514: a language server may send overlapping text edits.
+        // Feeding overlapping ranges to `ChangeSet::from_changes` violates its sorted/non-overlapping
+        // precondition and underflows `retain(from - last)`. The overlapping edit must be discarded here
+        use lsp::{Position, Range, TextEdit};
+
+        let edit = |sc, ec, text: &str| TextEdit {
+            range: Range {
+                start: Position::new(0, sc),
+                end: Position::new(0, ec),
+            },
+            new_text: text.to_string(),
+        };
+
+        // Edits are given out of order and the second overlaps the first
+        // (0..3 vs 2..4); after sorting, 2..4 starts before 0..3 ends.
+        let edits = vec![edit(4, 5, "Z"), edit(0, 3, "X"), edit(2, 4, "Y")];
+
+        let mut source = Rope::from_str("abcdef");
+        let transaction = generate_transaction_from_edits(&source, edits, OffsetEncoding::Utf16);
+        // Must not panic. The overlapping 2..4 edit is dropped; 0..3 -> "X",
+        // retain "d" (idx 3), 4..5 -> "Z", retain "f": "abcdef" -> "XdZf".
+        assert!(transaction.apply(&mut source));
+        assert_eq!(source, "XdZf");
+    }
+
+    #[test]
+    fn unsorted_edits_are_applied() {
+        // Out-of-order (but non-overlapping) edits must all land; the sort keeps
+        // every edit rather than dropping the earlier-positioned one.
+        use lsp::{Position, Range, TextEdit};
+
+        let edit = |sc, ec, text: &str| TextEdit {
+            range: Range {
+                start: Position::new(0, sc),
+                end: Position::new(0, ec),
+            },
+            new_text: text.to_string(),
+        };
+
+        let edits = vec![edit(4, 5, "Y"), edit(0, 1, "X")];
+
+        let mut source = Rope::from_str("abcdef");
+        let transaction = generate_transaction_from_edits(&source, edits, OffsetEncoding::Utf16);
+        assert!(transaction.apply(&mut source));
+        assert_eq!(source, "XbcdYf");
     }
 }

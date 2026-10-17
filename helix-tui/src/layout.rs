@@ -1,3 +1,5 @@
+//! Layout engine for terminal
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -7,6 +9,7 @@ use cassowary::{Constraint as CassowaryConstraint, Expression, Solver, Variable}
 
 use helix_view::graphics::{Margin, Rect};
 
+/// Enum of all corners
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
 pub enum Corner {
     TopLeft,
@@ -15,12 +18,14 @@ pub enum Corner {
     BottomLeft,
 }
 
+/// Direction a [Rect] should be split
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub enum Direction {
     Horizontal,
     Vertical,
 }
 
+/// Describes requirements of a [Rect] to be split
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Constraint {
     // TODO: enforce range 0 - 100
@@ -46,6 +51,7 @@ impl Constraint {
     }
 }
 
+/// How content should be aligned
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Alignment {
     Left,
@@ -53,6 +59,7 @@ pub enum Alignment {
     Right,
 }
 
+/// Description of a how a [Rect] should be split
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Layout {
     direction: Direction,
@@ -75,6 +82,7 @@ impl Default for Layout {
 }
 
 impl Layout {
+    /// Returns a layout with the given [Constraint]s.
     pub fn constraints<C>(mut self, constraints: C) -> Layout
     where
         C: Into<Vec<Constraint>>,
@@ -83,24 +91,26 @@ impl Layout {
         self
     }
 
-    pub fn margin(mut self, margin: u16) -> Layout {
+    /// Returns a layout wit the given margins on all sides.
+    pub const fn margin(mut self, margin: u16) -> Layout {
         self.margin = Margin::all(margin);
         self
     }
 
-    pub fn horizontal_margin(mut self, horizontal: u16) -> Layout {
-        self.margin.left = horizontal;
-        self.margin.right = horizontal;
+    /// Returns a layout with the given horizontal margins.
+    pub const fn horizontal_margin(mut self, horizontal: u16) -> Layout {
+        self.margin.horizontal = horizontal;
         self
     }
 
-    pub fn vertical_margin(mut self, vertical: u16) -> Layout {
-        self.margin.top = vertical;
-        self.margin.bottom = vertical;
+    /// Returns a layout with the given vertical margins.
+    pub const fn vertical_margin(mut self, vertical: u16) -> Layout {
+        self.margin.vertical = vertical;
         self
     }
 
-    pub fn direction(mut self, direction: Direction) -> Layout {
+    /// Returns a layout with the given [Direction].
+    pub const fn direction(mut self, direction: Direction) -> Layout {
         self.direction = direction;
         self
     }
@@ -191,7 +201,7 @@ fn split(area: Rect, layout: &Layout) -> Vec<Rect> {
         .map(|_| Rect::default())
         .collect::<Vec<Rect>>();
 
-    let dest_area = area.inner(&layout.margin);
+    let dest_area = area.inner(layout.margin);
     for (i, e) in elements.iter().enumerate() {
         vars.insert(e.x, (i, 0));
         vars.insert(e.y, (i, 1));

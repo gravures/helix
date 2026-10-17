@@ -23,20 +23,24 @@
 (let_in_block
   "let" @keyword
   "rec"? @keyword
+  "in" @keyword
+)
+
+(let_binding
   pat: (pattern
     (ident) @variable
   )
-  "in" @keyword
 )
+
 (fun_expr
   "fun" @keyword.function
   pats:
-    (pattern
-      id: (ident) @variable.parameter
-    )+
+    (pattern_fun (ident) @variable.parameter)+
   "=>" @operator
 )
 (record_field) @variable.other.member
+; Field access `o.field`: the id of a record operation chain.
+(record_operation_chain id: (ident) @variable.other.member)
 
 [
   "."

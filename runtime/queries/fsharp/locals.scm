@@ -1,25 +1,39 @@
-; Scopes
-;-------
+(identifier) @local.reference
 
 [
-  (ce_expression)
-  (module_defn)
-  (for_expression)
-  (do_expression)
+  (namespace)
+  (named_module)
+  (function_or_value_defn)
   (fun_expression)
-  (function_expression)
-  (try_expression)
+  (for_expression)
   (match_expression)
-  (elif_expression)
-  (if_expression)
+  (rule)
 ] @local.scope
 
-; Definitions
-;------------
+(function_declaration_left
+  .
+  ((_) @local.definition.function))
 
-(function_or_value_defn) @local.definition
+; Parameters live in `argument_patterns`, which appears under function
+; declarations, lambdas (`fun_expression`) and property accessors alike. The
+; identifier can sit several pattern wrappers deep (paren/typed/tuple/as), so
+; match it at any of those depths.
+(argument_patterns
+  [
+   (_ (identifier) @local.definition.variable.parameter)
+   (_ (_ (identifier) @local.definition.variable.parameter))
+   (_ (_ (_ (identifier) @local.definition.variable.parameter)))
+   (_ (_ (_ (_ (identifier) @local.definition.variable.parameter))))
+   (_ (_ (_ (_ (_ (identifier) @local.definition.variable.parameter)))))
+   (_ (_ (_ (_ (_ (_ (identifier) @local.definition.variable.parameter))))))
+  ])
 
-; References
-;-----------
+; `for i in ...` loop variable.
+(for_expression
+  (identifier) @local.definition.variable)
 
-(identifier) @local.reference
+; The `field` of `a.b` is member access, not a value reference.
+(dot_expression
+  field: (long_identifier_or_op (identifier) @_))
+(dot_expression
+  field: (long_identifier_or_op (long_identifier (identifier) @_)))

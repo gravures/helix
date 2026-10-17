@@ -437,7 +437,7 @@ async fn test_smart_tab_move_parent_node_end() -> anyhow::Result<()> {
                     let result = if true {
                             #[|\"yes\"\n]#
                     } else {
-                        \"no    #(|\"\n)#
+                        \"no #(|\"\n)#
                     }
                 }
             "},
@@ -893,6 +893,22 @@ async fn match_bracket() -> anyhow::Result<()> {
                 fn foo() {
                     foo::<bar<>#[>|]# 
                 }
+            "##},
+        ),
+        // named node with 2 or more children
+        (
+            indoc! {r##"
+                use a::#[{|]#
+                    b::{c, d, e, f, g},
+                    h, i, j, k, l, m, n,
+                };
+            "##},
+            "mm",
+            indoc! {r##"
+                use a::{
+                    b::{c, d, e, f, g},
+                    h, i, j, k, l, m, n,
+                #[}|]#;
             "##},
         ),
     ];
