@@ -11,8 +11,9 @@ use crate::{
     input::KeyEvent,
     register::Registers,
     theme::{self, Theme},
-    tree::{self, Tree},
-    Document, DocumentId, View, ViewId,
+    tree::{self, Dimension, Resize, Tree},
+    view::ViewPosition,
+    Align, Document, DocumentId, View, ViewId,
 };
 use helix_event::dispatch;
 use helix_loader::workspace_trust::{ImplicitTrustLevel, TrustQuery, WorkspaceTrust};
@@ -2328,6 +2329,14 @@ impl Editor {
 
     pub fn transpose_view(&mut self) {
         self.tree.transpose();
+    }
+
+    pub fn resize_buffer(&mut self, resize_type: Resize, dimension: Dimension) {
+        self.tree.resize_buffer(resize_type, dimension);
+    }
+
+    pub fn toggle_focus_window(&mut self) {
+        self.tree.toggle_focus_window();
     }
 
     pub fn should_close(&self) -> bool {
