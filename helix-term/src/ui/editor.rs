@@ -170,8 +170,8 @@ impl EditorView {
         let raw_help_lines: [(Spans, AlignLine); 12] = [
             (
                 vec![
-                    Span::raw("helix "),
-                    Span::styled(VERSION_AND_GIT_HASH, theme.get("comment")),
+                    Span::raw("helix(steel) unstable "),
+                    Span::styled("27.2.0", theme.get("comment")),
                 ]
                 .into(),
                 Center,
@@ -238,7 +238,14 @@ impl EditorView {
                 .into(),
                 Center,
             ),
-            empty_line(),
+            (
+                vec![
+                    Span::styled("build from ", theme.get("comment")),
+                    Span::styled(VERSION_AND_GIT_HASH, theme.get("comment")),
+                ]
+                .into(),
+                Center,
+            ),
         ];
 
         debug_assert!(
