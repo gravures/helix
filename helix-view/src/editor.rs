@@ -12,8 +12,7 @@ use crate::{
     register::Registers,
     theme::{self, Theme},
     tree::{self, Dimension, Resize, Tree},
-    view::ViewPosition,
-    Align, Document, DocumentId, View, ViewId,
+    Document, DocumentId, View, ViewId,
 };
 use helix_event::dispatch;
 use helix_loader::workspace_trust::{ImplicitTrustLevel, TrustQuery, WorkspaceTrust};

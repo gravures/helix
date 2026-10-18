@@ -951,7 +951,6 @@ impl EditorView {
     #[allow(clippy::too_many_lines)]
     pub fn render_bufferline(&mut self, editor: &Editor, viewport: Rect, surface: &mut Surface) {
         let theme = editor.theme.as_ref();
-
         let scratch = PathBuf::from(SCRATCH_BUFFER_NAME); // default filename to use for scratch buffer
 
         surface.clear_with(
@@ -992,21 +991,12 @@ impl EditorView {
             };
 
             let path = doc.path();
-
-            let start_x = x;
-            x = surface
-                .set_stringn(x, viewport.y, &text, rem_width as usize, style)
-                .0;
-            let end_x = x.min(surface.area.right());
-
-            self.bufferline_info
-                .add_buffer_info(doc.id(), start_x..end_x);
             let icons = ICONS.load();
 
+            let start_x = x;
             if let Some(path) = path {
                 if let Some(file) = icons.fs().file() {
                     let icon = file.get_with_active_style_or_default(path, theme, base);
-
                     let used = viewport.x.saturating_sub(x);
                     let remaining = surface.area.width.saturating_sub(used);
 
@@ -1058,6 +1048,9 @@ impl EditorView {
                     }
                 }
             }
+            let end_x = x.min(surface.area.right());
+            self.bufferline_info
+                .add_buffer_info(doc.id(), start_x..end_x);
         }
     }
 
