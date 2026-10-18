@@ -21,3 +21,8 @@
 
 - Inline Git Blame: [PR#13133](https://github.com/helix-editor/helix/pull/13133)
 - Code folding: [PR#14593](https://github.com/helix-editor/helix/pull/14593)
+- move selected lines up and down: [PR#14121](https://github.com/helix-editor/helix/pull/14121)
+- render soft-wrap indicators in the gutter: [#PR14825](https://github.com/helix-editor/helix/pull/14825)
+- match in next and previous char pairs: [#PR11695](https://github.com/helix-editor/helix/pull/11695)
+- scrollable file preview: [PR#15854](https://github.com/helix-editor/helix/pull/15854)
+- DAP: Fixed issue with debugpy corrupting terminal: [PR#15593](https://github.com/helix-editor/helix/pull/15593)
