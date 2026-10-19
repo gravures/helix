@@ -1,9 +1,11 @@
 use helix_loader::grammar::{build_grammars, fetch_grammars};
 
+const STRICT: bool = true;
+
 fn main() {
     if std::env::var("HELIX_DISABLE_AUTO_GRAMMAR_BUILD").is_err() {
-        fetch_grammars().expect("Failed to fetch tree-sitter grammars");
-        build_grammars(Some(std::env::var("TARGET").unwrap()))
+        fetch_grammars(STRICT).expect("Failed to fetch tree-sitter grammars");
+        build_grammars(Some(std::env::var("TARGET").unwrap()), STRICT)
             .expect("Failed to compile tree-sitter grammars");
     }
 
@@ -66,18 +68,16 @@ mod windows_rc {
             .output();
 
         match find_reg_key {
-            Err(find_reg_key) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Failed to run registry query: {}", find_reg_key),
-                ))
-            }
+            Err(find_reg_key) => Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Failed to run registry query: {}", find_reg_key),
+            )),
             Ok(find_reg_key) => {
                 if find_reg_key.status.code().unwrap() != 0 {
-                    return Err(io::Error::new(
+                    Err(io::Error::new(
                         io::ErrorKind::Other,
                         "Can not find Windows SDK",
-                    ));
+                    ))
                 } else {
                     let lines = String::from_utf8(find_reg_key.stdout)
                         .expect("Should be able to parse the output");

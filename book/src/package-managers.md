@@ -1,13 +1,15 @@
 ## Package managers
 
 - [Linux](#linux)
-  - [Ubuntu](#ubuntu)
+  - [Debian](#debian)
+  - [Ubuntu/Mint](#ubuntumint)
   - [Fedora/RHEL](#fedorarhel)
   - [Arch Linux extra](#arch-linux-extra)
   - [NixOS](#nixos)
   - [Flatpak](#flatpak)
   - [Snap](#snap)
   - [AppImage](#appimage)
+  - [Linux Homebrew Core](#linux-homebrew-core)
 - [macOS](#macos)
   - [Homebrew Core](#homebrew-core)
   - [MacPorts](#macports)
@@ -15,23 +17,30 @@
   - [Winget](#winget)
   - [Scoop](#scoop)
   - [Chocolatey](#chocolatey)
+  - [Packably](#packably)
   - [MSYS2](#msys2)
 
-[![Packaging status](https://repology.org/badge/vertical-allrepos/helix.svg)](https://repology.org/project/helix/versions)
+[![Packaging status](https://repology.org/badge/vertical-allrepos/helix-editor.svg)](https://repology.org/project/helix-editor/versions)
 
 ## Linux
 
 The following third party repositories are available:
 
-### Ubuntu
-
-Add the `PPA` for Helix:
+### Debian
 
 ```sh
-sudo add-apt-repository ppa:maveonair/helix-editor
-sudo apt update
-sudo apt install helix
+sudo apt install hx
 ```
+
+If you are running a system older than Debian 13, follow the steps for
+[Ubuntu/Mint](#ubuntumint).
+
+### Ubuntu/Mint
+
+Install the Debian package [from the release page](https://github.com/helix-editor/helix/releases/latest).
+
+If you are running a system older than Ubuntu 22.04, Mint 21, or Debian 12, you can build the `.deb` file locally
+[from source](./building-from-source.md#building-the-debian-package).
 
 ### Fedora/RHEL
 
@@ -63,7 +72,7 @@ in the AUR, which builds the master branch.
 Helix is available in [nixpkgs](https://github.com/nixos/nixpkgs) through the `helix` attribute,
 the unstable channel usually carries the latest release.
 
-Helix is also available as a [flake](https://nixos.wiki/wiki/Flakes) in the project
+Helix is also available as a [flake](https://wiki.nixos.org/wiki/Flakes) in the project
 root. Use `nix develop` to spin up a reproducible development shell. Outputs are
 cached for each push to master using [Cachix](https://www.cachix.org/). The
 flake is configured to automatically make use of this cache assuming the user
@@ -101,24 +110,44 @@ Download the official Helix AppImage from the [latest releases](https://github.c
 chmod +x helix-*.AppImage # change permission for executable mode
 ./helix-*.AppImage # run helix
 ```
- 
+
+You can optionally [add the `.desktop` file](./building-from-source.md#configure-the-desktop-shortcut). Helix must be installed in `PATH` with the name `hx`. For example:
+```sh
+mkdir -p "$HOME/.local/bin"
+mv helix-*.AppImage "$HOME/.local/bin/hx"
+```
+
+and make sure `~/.local/bin` is in your `PATH`.
+
+### Linux Homebrew Core
+
+Checkout the [macOS](#homebrew-core) instructions below.
+
 ## macOS
 
 ### Homebrew Core
+
+Install the latest release:
 
 ```sh
 brew install helix
 ```
 
+Or, install the latest nightly version:
+
+```sh
+brew install --HEAD helix
+```
+
 ### MacPorts
 
 ```sh
-port install helix
+sudo port install helix
 ```
 
 ## Windows
 
-Install on Windows using [Winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/), [Scoop](https://scoop.sh/), [Chocolatey](https://chocolatey.org/)
+Install on Windows using [Winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/), [Scoop](https://scoop.sh/), [Chocolatey](https://chocolatey.org/), [Packably](https://www.packably.com.br/)
 or [MSYS2](https://msys2.org/).
 
 ### Winget
@@ -139,6 +168,12 @@ scoop install helix
 
 ```sh
 choco install helix
+```
+
+### Packably
+
+```sh
+packl install helix
 ```
 
 ### MSYS2

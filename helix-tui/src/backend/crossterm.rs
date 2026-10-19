@@ -8,27 +8,46 @@ use crossterm::{
     },
     execute, queue,
     style::{
-        Attribute as CAttribute, Color as CColor, Print, SetAttribute, SetBackgroundColor,
-        SetForegroundColor,
+        Attribute as CAttribute, Color as CColor, Colors, Print, SetAttribute, SetBackgroundColor,
+        SetColors, SetForegroundColor,
     },
-    terminal::{self, Clear, ClearType},
+    terminal::{self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate},
     Command,
 };
-use helix_view::{
-    editor::Config as EditorConfig,
-    graphics::{Color, CursorKind, Modifier, Rect, UnderlineStyle},
-};
-use once_cell::sync::OnceCell;
+use helix_view::graphics::{Color, CursorKind, Modifier, Rect, UnderlineStyle};
+use std::sync::OnceLock;
 use std::{
     fmt,
     io::{self, Write},
 };
+use termini::TermInfo;
 
 fn term_program() -> Option<String> {
-    std::env::var("TERM_PROGRAM").ok()
+    // Some terminals don't set $TERM_PROGRAM
+    match std::env::var("TERM_PROGRAM") {
+        Err(_) => std::env::var("TERM").ok(),
+        Ok(term_program) => Some(term_program),
+    }
 }
 fn vte_version() -> Option<usize> {
     std::env::var("VTE_VERSION").ok()?.parse().ok()
+}
+fn reset_cursor_approach(terminfo: TermInfo) -> String {
+    let mut reset_str = String::new();
+
+    if let Some(termini::Value::Utf8String(se_str)) = terminfo.extended_cap("Se") {
+        reset_str.push_str(se_str);
+    };
+
+    reset_str.push_str(
+        terminfo
+            .utf8_string_cap(termini::StringCapability::CursorNormal)
+            .unwrap_or(""),
+    );
+
+    reset_str.push_str("\x1B[0 q");
+
+    reset_str
 }
 
 /// Describes terminal capabilities like extended underline, truecolor, etc.
@@ -54,34 +73,33 @@ impl Capabilities {
     /// on the $TERM environment variable. If detection fails, returns
     /// a default value where no capability is supported, or just undercurl
     /// if config.undercurl is set.
-    pub fn from_env_or_default(config: &EditorConfig) -> Self {
+    pub fn from_env_or_default(config: &Config) -> Self {
         match termini::TermInfo::from_env() {
             Err(_) => Capabilities {
-                has_extended_underlines: config.undercurl,
+                has_extended_underlines: config.force_enable_extended_underlines,
                 ..Capabilities::default()
             },
             Ok(t) => Capabilities {
                 // Smulx, VTE: https://unix.stackexchange.com/a/696253/246284
                 // Su (used by kitty): https://sw.kovidgoyal.net/kitty/underlines
-                // WezTerm supports underlines but a lot of distros don't properly install it's terminfo
-                has_extended_underlines: config.undercurl
+                // WezTerm supports underlines but a lot of distros don't properly install its terminfo
+                has_extended_underlines: config.force_enable_extended_underlines
                     || t.extended_cap("Smulx").is_some()
                     || t.extended_cap("Su").is_some()
                     || vte_version() >= Some(5102)
                     || matches!(term_program().as_deref(), Some("WezTerm")),
-                reset_cursor_command: t
-                    .utf8_string_cap(termini::StringCapability::CursorNormal)
-                    .unwrap_or("\x1B[0 q")
-                    .to_string(),
+                reset_cursor_command: reset_cursor_approach(t),
             },
         }
     }
 }
 
+/// Terminal backend supporting a wide variety of terminals
 pub struct CrosstermBackend<W: Write> {
     buffer: W,
+    config: Config,
     capabilities: Capabilities,
-    supports_keyboard_enhancement_protocol: OnceCell<bool>,
+    supports_keyboard_enhancement_protocol: OnceLock<bool>,
     mouse_capture_enabled: bool,
     supports_bracketed_paste: bool,
 }
@@ -90,15 +108,16 @@ impl<W> CrosstermBackend<W>
 where
     W: Write,
 {
-    pub fn new(buffer: W, config: &EditorConfig) -> CrosstermBackend<W> {
+    pub fn new(buffer: W, config: Config) -> CrosstermBackend<W> {
         // helix is not usable without colors, but crossterm will disable
         // them by default if NO_COLOR is set in the environment. Override
         // this behaviour.
         crossterm::style::force_color_output(true);
         CrosstermBackend {
             buffer,
-            capabilities: Capabilities::from_env_or_default(config),
-            supports_keyboard_enhancement_protocol: OnceCell::new(),
+            capabilities: Capabilities::from_env_or_default(&config),
+            config,
+            supports_keyboard_enhancement_protocol: OnceLock::new(),
             mouse_capture_enabled: false,
             supports_bracketed_paste: true,
         }
@@ -139,7 +158,7 @@ impl<W> Backend for CrosstermBackend<W>
 where
     W: Write,
 {
-    fn claim(&mut self, config: Config) -> io::Result<()> {
+    fn claim(&mut self) -> io::Result<()> {
         terminal::enable_raw_mode()?;
         execute!(
             self.buffer,
@@ -155,7 +174,7 @@ where
             Ok(_) => (),
         };
         execute!(self.buffer, terminal::Clear(terminal::ClearType::All))?;
-        if config.enable_mouse_capture {
+        if self.config.enable_mouse_capture {
             execute!(self.buffer, EnableMouseCapture)?;
             self.mouse_capture_enabled = true;
         }
@@ -180,15 +199,16 @@ where
             }
             self.mouse_capture_enabled = config.enable_mouse_capture;
         }
+        self.config = config;
 
         Ok(())
     }
 
-    fn restore(&mut self, config: Config) -> io::Result<()> {
+    fn restore(&mut self) -> io::Result<()> {
         // reset cursor shape
         self.buffer
             .write_all(self.capabilities.reset_cursor_command.as_bytes())?;
-        if config.enable_mouse_capture {
+        if self.config.enable_mouse_capture {
             execute!(self.buffer, DisableMouseCapture)?;
         }
         if self.supports_keyboard_enhancement_protocol() {
@@ -202,20 +222,6 @@ where
             DisableFocusChange,
             terminal::LeaveAlternateScreen
         )?;
-        terminal::disable_raw_mode()
-    }
-
-    fn force_restore() -> io::Result<()> {
-        let mut stdout = io::stdout();
-
-        // reset cursor shape
-        write!(stdout, "\x1B[0 q")?;
-        // Ignore errors on disabling, this might trigger on windows if we call
-        // disable without calling enable previously
-        let _ = execute!(stdout, DisableMouseCapture);
-        let _ = execute!(stdout, PopKeyboardEnhancementFlags);
-        let _ = execute!(stdout, DisableBracketedPaste);
-        execute!(stdout, DisableFocusChange, terminal::LeaveAlternateScreen)?;
         terminal::disable_raw_mode()
     }
 
@@ -243,14 +249,12 @@ where
                 diff.queue(&mut self.buffer)?;
                 modifier = cell.modifier;
             }
-            if cell.fg != fg {
-                let color = CColor::from(cell.fg);
-                queue!(self.buffer, SetForegroundColor(color))?;
+            if cell.fg != fg || cell.bg != bg {
+                queue!(
+                    self.buffer,
+                    SetColors(Colors::new(cell.fg.into(), cell.bg.into()))
+                )?;
                 fg = cell.fg;
-            }
-            if cell.bg != bg {
-                let color = CColor::from(cell.bg);
-                queue!(self.buffer, SetBackgroundColor(color))?;
                 bg = cell.bg;
             }
 
@@ -287,7 +291,7 @@ where
     }
 
     fn hide_cursor(&mut self) -> io::Result<()> {
-        execute!(self.buffer, Hide)
+        queue!(self.buffer, Hide)
     }
 
     fn show_cursor(&mut self, kind: CursorKind) -> io::Result<()> {
@@ -297,20 +301,23 @@ where
             CursorKind::Underline => SetCursorStyle::SteadyUnderScore,
             CursorKind::Hidden => unreachable!(),
         };
-        execute!(self.buffer, Show, shape)
-    }
-
-    fn get_cursor(&mut self) -> io::Result<(u16, u16)> {
-        crossterm::cursor::position()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+        queue!(self.buffer, Show, shape)
     }
 
     fn set_cursor(&mut self, x: u16, y: u16) -> io::Result<()> {
-        execute!(self.buffer, MoveTo(x, y))
+        queue!(self.buffer, MoveTo(x, y))
     }
 
     fn clear(&mut self) -> io::Result<()> {
-        execute!(self.buffer, Clear(ClearType::All))
+        queue!(self.buffer, Clear(ClearType::All))
+    }
+
+    fn start_sync(&mut self) -> io::Result<()> {
+        queue!(self.buffer, BeginSynchronizedUpdate)
+    }
+
+    fn end_sync(&mut self) -> io::Result<()> {
+        queue!(self.buffer, EndSynchronizedUpdate)
     }
 
     fn size(&self) -> io::Result<Rect> {
@@ -322,6 +329,18 @@ where
 
     fn flush(&mut self) -> io::Result<()> {
         self.buffer.flush()
+    }
+
+    fn supports_true_color(&self) -> bool {
+        false
+    }
+
+    fn get_theme_mode(&self) -> Option<helix_view::theme::Mode> {
+        None
+    }
+
+    fn set_background_color(&mut self, _color: Option<helix_view::theme::Color>) -> io::Result<()> {
+        Ok(())
     }
 }
 

@@ -1,5 +1,9 @@
-(function_item
-  body: (_) @function.inside) @function.around
+(
+  (attribute_item)* @function.around
+  .
+  (function_item
+    body: (_) @function.inside) @function.around
+)
 
 (closure_expression
   body: (_) @function.inside) @function.around
@@ -49,12 +53,13 @@
 (; #[test]
  (attribute_item
    (attribute
-     (identifier) @_test_attribute))
+     (identifier) @_test_attribute)) @test.around
  ; allow other attributes like #[should_panic] and comments
  [
-   (attribute_item)
-   (line_comment)
+   (attribute_item) @test.around
+   (line_comment) @test.around
  ]*
+ .
  ; the test function
  (function_item
    body: (_) @test.inside) @test.around
@@ -69,7 +74,7 @@
 (tuple_pattern
   (_) @entry.around)
 
-; Commonly used vec macro intializer is special cased
+; Commonly used vec macro initializer is special cased
 (macro_invocation
   (identifier) @_id (token_tree (_) @entry.around)
   (#eq? @_id "vec"))

@@ -1,5 +1,5 @@
 (function_definition
-  (imperative_block) @funtion.inside) @function.around
+  (imperative_block) @function.inside) @function.around
 
 (callback_event
   (imperative_block) @function.inside) @function.around
@@ -22,7 +22,7 @@
 (component_definition
   (block) @class.inside) @class.around
 
-(comment) @comment.around
+[(line_comment) (block_comment)] @comment.around
 
 (typed_identifier
   name: (_) @parameter.inside) @parameter.around
@@ -31,5 +31,5 @@
   arguments: (_) @parameter.inside)
 
 (string_value
-  "\"" . (_) @text.inside . "\"") @text.around
+  "\"" . (_) @entry.inside . "\"") @entry.around
 

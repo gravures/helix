@@ -1,7 +1,7 @@
 use crate::{
     buffer::Buffer,
     symbols::line,
-    text::{Span, Spans},
+    text::Spans,
     widgets::{Borders, Widget},
 };
 use helix_view::graphics::{Rect, Style};
@@ -58,6 +58,22 @@ pub struct Block<'a> {
 }
 
 impl<'a> Block<'a> {
+    pub const fn new() -> Self {
+        Self {
+            title: None,
+            borders: Borders::empty(),
+            border_style: Style::new(),
+            border_type: BorderType::Plain,
+            style: Style::new(),
+        }
+    }
+
+    pub const fn bordered() -> Self {
+        let mut block = Self::new();
+        block.borders = Borders::ALL;
+        block
+    }
+
     pub fn title<T>(mut self, title: T) -> Block<'a>
     where
         T: Into<Spans<'a>>,
@@ -66,34 +82,22 @@ impl<'a> Block<'a> {
         self
     }
 
-    #[deprecated(
-        since = "0.10.0",
-        note = "You should use styling capabilities of `text::Spans` given as argument of the `title` method to apply styling to the title."
-    )]
-    pub fn title_style(mut self, style: Style) -> Block<'a> {
-        if let Some(t) = self.title {
-            let title = String::from(&t);
-            self.title = Some(Spans::from(Span::styled(title, style)));
-        }
-        self
-    }
-
-    pub fn border_style(mut self, style: Style) -> Block<'a> {
+    pub const fn border_style(mut self, style: Style) -> Block<'a> {
         self.border_style = style;
         self
     }
 
-    pub fn style(mut self, style: Style) -> Block<'a> {
+    pub const fn style(mut self, style: Style) -> Block<'a> {
         self.style = style;
         self
     }
 
-    pub fn borders(mut self, flag: Borders) -> Block<'a> {
+    pub const fn borders(mut self, flag: Borders) -> Block<'a> {
         self.borders = flag;
         self
     }
 
-    pub fn border_type(mut self, border_type: BorderType) -> Block<'a> {
+    pub const fn border_type(mut self, border_type: BorderType) -> Block<'a> {
         self.border_type = border_type;
         self
     }
@@ -117,9 +121,87 @@ impl<'a> Block<'a> {
         }
         inner
     }
+
+    #[cfg(feature = "steel")]
+    pub fn render_with_bounds(self, area: Rect, buf: &mut Buffer) {
+        if area.area() == 0 {
+            return;
+        }
+        buf.set_style(area, self.style);
+        let symbols = BorderType::line_symbols(self.border_type);
+
+        // Sides
+        if self.borders.intersects(Borders::LEFT) {
+            for y in area.top()..area.bottom() {
+                if let Some(cell) = buf.get_mut(area.left(), y) {
+                    cell.set_symbol(symbols.vertical)
+                        .set_style(self.border_style);
+                }
+            }
+        }
+        if self.borders.intersects(Borders::TOP) {
+            for x in area.left()..area.right() {
+                if let Some(cell) = buf.get_mut(x, area.top()) {
+                    cell.set_symbol(symbols.horizontal)
+                        .set_style(self.border_style);
+                }
+            }
+        }
+        if self.borders.intersects(Borders::RIGHT) {
+            let x = area.right() - 1;
+            for y in area.top()..area.bottom() {
+                if let Some(cell) = buf.get_mut(x, y) {
+                    cell.set_symbol(symbols.vertical)
+                        .set_style(self.border_style);
+                }
+            }
+        }
+        if self.borders.intersects(Borders::BOTTOM) {
+            let y = area.bottom() - 1;
+            for x in area.left()..area.right() {
+                if let Some(cell) = buf.get_mut(x, y) {
+                    cell.set_symbol(symbols.horizontal)
+                        .set_style(self.border_style);
+                }
+            }
+        }
+
+        // Corners
+        if self.borders.contains(Borders::RIGHT | Borders::BOTTOM) {
+            if let Some(cell) = buf.get_mut(area.right() - 1, area.bottom() - 1) {
+                cell.set_symbol(symbols.bottom_right)
+                    .set_style(self.border_style);
+            }
+        }
+        if self.borders.contains(Borders::RIGHT | Borders::TOP) {
+            if let Some(cell) = buf.get_mut(area.right() - 1, area.top()) {
+                cell.set_symbol(symbols.top_right)
+                    .set_style(self.border_style);
+            }
+        }
+        if self.borders.contains(Borders::LEFT | Borders::BOTTOM) {
+            if let Some(cell) = buf.get_mut(area.left(), area.bottom() - 1) {
+                cell.set_symbol(symbols.bottom_left)
+                    .set_style(self.border_style);
+            }
+        }
+        if self.borders.contains(Borders::LEFT | Borders::TOP) {
+            if let Some(cell) = buf.get_mut(area.left(), area.top()) {
+                cell.set_symbol(symbols.top_left)
+                    .set_style(self.border_style);
+            }
+        }
+
+        if let Some(title) = self.title {
+            let lx = u16::from(self.borders.intersects(Borders::LEFT));
+            let rx = u16::from(self.borders.intersects(Borders::RIGHT));
+            let width = area.width.saturating_sub(lx).saturating_sub(rx);
+            buf.set_spans(area.left() + lx, area.top(), &title, width);
+        }
+    }
 }
 
-impl<'a> Widget for Block<'a> {
+impl Widget for Block<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         if area.area() == 0 {
             return;
@@ -413,9 +495,7 @@ mod tests {
 
         // All borders
         assert_eq!(
-            Block::default()
-                .borders(Borders::ALL)
-                .inner(Rect::default()),
+            Block::bordered().inner(Rect::default()),
             Rect {
                 x: 0,
                 y: 0,
@@ -425,7 +505,7 @@ mod tests {
             "all borders, width=0, height=0"
         );
         assert_eq!(
-            Block::default().borders(Borders::ALL).inner(Rect {
+            Block::bordered().inner(Rect {
                 x: 0,
                 y: 0,
                 width: 1,
@@ -440,7 +520,7 @@ mod tests {
             "all borders, width=1, height=1"
         );
         assert_eq!(
-            Block::default().borders(Borders::ALL).inner(Rect {
+            Block::bordered().inner(Rect {
                 x: 0,
                 y: 0,
                 width: 2,
@@ -455,7 +535,7 @@ mod tests {
             "all borders, width=2, height=2"
         );
         assert_eq!(
-            Block::default().borders(Borders::ALL).inner(Rect {
+            Block::bordered().inner(Rect {
                 x: 0,
                 y: 0,
                 width: 3,

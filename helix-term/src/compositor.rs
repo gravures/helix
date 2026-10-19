@@ -13,6 +13,7 @@ pub type SyncCallback = Box<dyn FnOnce(&mut Compositor, &mut Context) + Sync>;
 pub enum EventResult {
     Ignored(Option<Callback>),
     Consumed(Option<Callback>),
+    ConsumedWithoutRerender,
 }
 
 use crate::job::Jobs;
@@ -27,7 +28,7 @@ pub struct Context<'a> {
     pub jobs: &'a mut Jobs,
 }
 
-impl<'a> Context<'a> {
+impl Context<'_> {
     /// Waits on all pending jobs, and then tries to flush all pending write
     /// operations for all documents.
     pub fn block_try_flush_writes(&mut self) -> anyhow::Result<()> {
@@ -72,6 +73,10 @@ pub trait Component: Any + AnyComponent {
 
     fn id(&self) -> Option<&'static str> {
         None
+    }
+
+    fn name(&self) -> Option<&str> {
+        self.id()
     }
 }
 
@@ -132,14 +137,31 @@ impl Compositor {
         let idx = self
             .layers
             .iter()
-            .position(|layer| layer.id() == Some(id))?;
+            .rposition(|layer| layer.id() == Some(id))?;
         Some(self.layers.remove(idx))
     }
 
+    pub fn remove_by_dynamic_name(&mut self, id: &str) -> Option<Box<dyn Component>> {
+        let idx = self
+            .layers
+            .iter()
+            .rposition(|layer| layer.name() == Some(id))?;
+        Some(self.layers.remove(idx))
+    }
+
+    pub fn remove_type<T: 'static>(&mut self) {
+        let type_name = std::any::type_name::<T>();
+        self.layers
+            .retain(|component| component.type_name() != type_name);
+    }
+
     pub fn handle_event(&mut self, event: &Event, cx: &mut Context) -> bool {
-        // If it is a key event and a macro is being recorded, push the key event to the recording.
+        // If it is a key event, a macro is being recorded, and a macro isn't being replayed,
+        // push the key event to the recording.
         if let (Event::Key(key), Some((_, keys))) = (event, &mut cx.editor.macro_recording) {
-            keys.push(*key);
+            if cx.editor.macro_replaying.is_empty() {
+                keys.push(*key);
+            }
         }
 
         let mut callbacks = Vec::new();
@@ -159,6 +181,10 @@ impl Compositor {
                     consumed = true;
                     break;
                 }
+                // Swallow the event, but don't trigger a re-render
+                EventResult::ConsumedWithoutRerender => {
+                    break;
+                }
                 EventResult::Ignored(Some(callback)) => {
                     callbacks.push(callback);
                 }
@@ -175,7 +201,9 @@ impl Compositor {
 
     pub fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         for layer in &mut self.layers {
-            layer.render(area, surface, cx);
+            if layer.should_update() {
+                layer.render(area, surface, cx)
+            };
         }
     }
 
@@ -211,6 +239,10 @@ impl Compositor {
 
     pub fn need_full_redraw(&mut self) {
         self.full_redraw = true;
+    }
+
+    pub fn layer_count(&self) -> usize {
+        self.layers.len()
     }
 }
 

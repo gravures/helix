@@ -33,6 +33,19 @@
     (pair_pattern
       value: (identifier) @variable.parameter)))
 
+; ({ p = default }: { p: t = default })
+(required_parameter
+  (object_pattern
+    (object_assignment_pattern
+      left: (shorthand_property_identifier_pattern) @variable.parameter)))
+
+; ({ a: p = default }: { a: t = default })
+(required_parameter
+  (object_pattern
+    (pair_pattern
+      value: (assignment_pattern
+        left: (identifier) @variable.parameter))))
+
 ; ([ p ]: t[])
 (required_parameter
   (array_pattern
@@ -59,10 +72,27 @@
     (pair_pattern
       value: (identifier) @variable.parameter)))
 
+; ({ p = default }: { p?: t = default })
+(optional_parameter
+  (object_pattern
+    (object_assignment_pattern
+      left: (shorthand_property_identifier_pattern) @variable.parameter)))
+
+; ({ a: p = default }: { a?: t = default })
+(optional_parameter
+  (object_pattern
+    (pair_pattern
+      value: (assignment_pattern
+        left: (identifier) @variable.parameter))))
+
 ; ([ p ]?: t[]) // Invalid but still possible to highlight.
 (optional_parameter
   (array_pattern
     (identifier) @variable.parameter))
+
+(public_field_definition) @punctuation.special
+(this_type) @variable.builtin
+(type_predicate) @keyword.operator
 
 ; Punctuation
 ; -----------
@@ -75,21 +105,32 @@
 (property_signature "?" @punctuation.special)
 
 (conditional_type ["?" ":"] @operator)
+(ternary_expression ["?" ":"] @operator)
 
 ; Keywords
 ; --------
 
 [
   "abstract"
+  "accessor"
   "declare"
-  "export"
+  "module"
   "infer"
   "implements"
   "keyof"
   "namespace"
   "override"
   "satisfies"
+  "using"
 ] @keyword
+
+; `asserts` in a return-type type predicate, e.g. `function f(x): asserts x is T`
+"asserts" @keyword.operator
+
+[
+  "export"
+  "from"
+] @keyword.control.import
 
 [
   "type"
@@ -107,9 +148,9 @@
 ; Types
 ; -----
 
+(type_identifier) @type
 (type_parameter
   name: (type_identifier) @type.parameter)
-(type_identifier) @type
 (predefined_type) @type.builtin
 
 ; Type arguments and parameters
@@ -127,6 +168,9 @@
     ">"
   ] @punctuation.bracket)
 
+(omitting_type_annotation) @punctuation.special
+(opting_type_annotation) @punctuation.special
+
 ; Literals
 ; --------
 
@@ -134,9 +178,20 @@
   (template_literal_type)
 ] @string
 
-; Tokens
-; ------
+(import_require_clause
+  (identifier) "="
+  ("require") @keyword)
 
-(template_type
-  "${" @punctuation.special
-  "}" @punctuation.special) @embedded
+; Method signatures in interfaces / type literals, and function-typed
+; property signatures (`foo(): void`, `bar: () => void`).
+(method_signature
+  name: (property_identifier) @function.method)
+(abstract_method_signature
+  name: (property_identifier) @function.method)
+(property_signature
+  name: (property_identifier) @function.method
+  type: (type_annotation
+    [
+      (function_type)
+      (union_type (parenthesized_type (function_type)))
+    ]))
