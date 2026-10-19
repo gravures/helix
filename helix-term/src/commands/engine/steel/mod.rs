@@ -5545,7 +5545,7 @@ pub fn add_inlay_hint(
         let doc_text = doc.text();
         let len_lines = doc_text.len_lines();
 
-        let view_height = view.inner_height();
+        let view_height = view.inner_height(doc);
         let first_visible_line =
             doc_text.char_to_line(doc.view_offset(view_id).anchor.min(doc_text.len_chars()));
         let first_line = first_visible_line.saturating_sub(view_height);
@@ -5597,7 +5597,7 @@ pub fn remove_inlay_hint_by_id(
         let doc_text = doc.text();
         let len_lines = doc_text.len_lines();
 
-        let view_height = view.inner_height();
+        let view_height = view.inner_height(doc);
         let first_visible_line =
             doc_text.char_to_line(doc.view_offset(view_id).anchor.min(doc_text.len_chars()));
         let first_line = first_visible_line.saturating_sub(view_height);
