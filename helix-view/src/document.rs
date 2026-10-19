@@ -2429,6 +2429,8 @@ impl Document {
             .or(editor_soft_wrap.max_indent_retain)
             .unwrap_or(40);
 
+        let icons: DynGuard<Icons> = ICONS.load();
+        let wrap_icon = icons.ui().r#virtual().wrap();
         let wrap_indicator = language_soft_wrap
             .and_then(|soft_wrap| {
                 soft_wrap
@@ -2436,10 +2438,14 @@ impl Document {
                     .as_ref()
                     .and_then(|indicator| StackString::try_from(indicator.as_str()).ok())
             })
-            .unwrap_or_else(|| {
-                let icons: DynGuard<Icons> = ICONS.load();
-                icons.ui().r#virtual().wrap().glyph()
-            });
+            .or_else(|| wrap_icon.is_user_overridden().then(|| wrap_icon.glyph()))
+            .or_else(|| {
+                editor_soft_wrap
+                    .wrap_indicator
+                    .as_ref()
+                    .and_then(|indicator| StackString::try_from(indicator.as_str()).ok())
+            })
+            .unwrap_or_else(|| wrap_icon.glyph());
 
         let tab_width = self.tab_width() as u16;
 

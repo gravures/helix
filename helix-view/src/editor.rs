@@ -2801,4 +2801,25 @@ mod legacy_config_tests {
         assert_eq!(config.whitespace.characters.space, '·');
         assert_eq!(config.whitespace.characters.tab, '→');
     }
+
+    #[test]
+    fn legacy_separator_and_whitespace_characters_roundtrip() {
+        let config: Config = toml::from_str(
+            r#"
+            [statusline]
+            separator = "|"
+            [whitespace.characters]
+            tab = "»"
+            tabpad = "_"
+            "#,
+        )
+        .unwrap();
+
+        let serialized = toml::to_string(&config).expect("config must serialize");
+        let reparsed: Config = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(reparsed.statusline.separator, "|");
+        assert_eq!(reparsed.whitespace.characters.tab, '»');
+        assert_eq!(reparsed.whitespace.characters.tabpad, '_');
+    }
 }

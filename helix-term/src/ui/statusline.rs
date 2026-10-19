@@ -623,9 +623,16 @@ where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
     let style = context.editor.theme.get("ui.statusline.separator");
-    let icons = ICONS.load();
-    let icon = icons.ui().statusline().separator();
-    write(context, Span::styled(icon.to_string(), style));
+    let separator = {
+        let config = context.editor.config();
+        let icon = ICONS.load().ui().statusline().separator();
+        if icon.is_user_overridden() || config.statusline.separator == "│" {
+            icon.glyph().to_string()
+        } else {
+            config.statusline.separator.clone()
+        }
+    };
+    write(context, Span::styled(separator, style));
 }
 
 fn render_spacer<'a, F>(context: &mut RenderContext<'a>, write: F)

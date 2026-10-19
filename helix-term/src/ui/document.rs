@@ -9,9 +9,9 @@ use helix_core::{visual_offset_from_block, Position, RopeSlice};
 use helix_stdx::rope::RopeSliceExt;
 use helix_stdx::stack_format;
 use helix_stdx::string::StackString;
-use helix_view::editor::{WhitespaceConfig, WhitespaceRenderValue};
+use helix_view::editor::{WhitespaceCharacters, WhitespaceConfig, WhitespaceRenderValue};
 use helix_view::graphics::Rect;
-use helix_view::icons::ICONS;
+use helix_view::icons::{Icon, ICONS};
 use helix_view::theme::Style;
 use helix_view::view::ViewPosition;
 use helix_view::{Document, Theme};
@@ -204,6 +204,17 @@ pub struct GraphemeStyle {
     overlay_style: Style,
 }
 
+/// Precedence: user-set icon > non-default legacy char > icon default.
+fn pick_glyph(icon: Icon, legacy: char, legacy_default: char) -> StackString {
+    if !icon.is_user_overridden() && legacy != legacy_default {
+        let mut glyph = StackString::new();
+        glyph.push(legacy);
+        glyph
+    } else {
+        icon.glyph()
+    }
+}
+
 impl<'a> TextRenderer<'a> {
     pub fn new(
         surface: &'a mut Surface,
@@ -213,19 +224,20 @@ impl<'a> TextRenderer<'a> {
         viewport: Rect,
     ) -> TextRenderer<'a> {
         let config = doc.config.load();
-        let WhitespaceConfig { render, .. } = &config.whitespace;
+        let WhitespaceConfig { render, characters } = &config.whitespace;
+        let defaults = WhitespaceCharacters::default();
 
         let tab_width = doc.tab_width();
 
         let icons = ICONS.load();
         let whitespace = icons.ui().r#virtual();
 
+        let tab_glyph = pick_glyph(whitespace.tab(), characters.tab, defaults.tab);
+        let tabpad_glyph = pick_glyph(whitespace.tabpad(), characters.tabpad, defaults.tabpad);
+
         let tab = match render.tab() {
-            WhitespaceRenderValue::All => std::iter::once(whitespace.tab().glyph().as_str())
-                .chain(std::iter::repeat_n(
-                    whitespace.tabpad().glyph().as_str(),
-                    tab_width - 1,
-                ))
+            WhitespaceRenderValue::All => std::iter::once(tab_glyph.as_str())
+                .chain(std::iter::repeat_n(tabpad_glyph.as_str(), tab_width - 1))
                 .fold(StackString::new(), |mut string, str| {
                     string.push_str(str);
                     string
@@ -249,22 +261,30 @@ impl<'a> TextRenderer<'a> {
 
         let newline = match render.newline() {
             WhitespaceRenderValue::None => StackString::from(" "),
-            WhitespaceRenderValue::All => whitespace.newline().glyph(),
+            WhitespaceRenderValue::All => {
+                pick_glyph(whitespace.newline(), characters.newline, defaults.newline)
+            }
         };
 
         let space = match render.space() {
             WhitespaceRenderValue::None => StackString::from(" "),
-            WhitespaceRenderValue::All => whitespace.space().glyph(),
+            WhitespaceRenderValue::All => {
+                pick_glyph(whitespace.space(), characters.space, defaults.space)
+            }
         };
 
         let nbsp = match render.nbsp() {
             WhitespaceRenderValue::None => StackString::from(" "),
-            WhitespaceRenderValue::All => whitespace.nbsp().glyph(),
+            WhitespaceRenderValue::All => {
+                pick_glyph(whitespace.nbsp(), characters.nbsp, defaults.nbsp)
+            }
         };
 
         let nnbsp = match render.nnbsp() {
             WhitespaceRenderValue::None => StackString::from(" "),
-            WhitespaceRenderValue::All => whitespace.nnbsp().glyph(),
+            WhitespaceRenderValue::All => {
+                pick_glyph(whitespace.nnbsp(), characters.nnbsp, defaults.nnbsp)
+            }
         };
 
         let text_style = theme.get("ui.text");
@@ -608,5 +628,26 @@ impl<'t> OverlayHighlighter<'t> {
             acc.patch(self.theme.highlight(highlight))
         });
         self.update_pos();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn icon(glyph: &'static str) -> Icon {
+        let mut icon = Icon::default();
+        icon.set_glyph(glyph);
+        icon
+    }
+
+    #[test]
+    fn pick_glyph_precedence() {
+        let overridden: Icon = toml::from_str("glyph = 'X'").unwrap();
+
+        assert_eq!(pick_glyph(overridden, 'L', 'D').as_str(), "X"); // icon wins
+        assert_eq!(pick_glyph(overridden, 'D', 'D').as_str(), "X"); // icon wins over default legacy
+        assert_eq!(pick_glyph(icon("I"), 'L', 'D').as_str(), "L"); // non-default legacy wins
+        assert_eq!(pick_glyph(icon("I"), 'D', 'D').as_str(), "I"); // default legacy → icon
     }
 }
