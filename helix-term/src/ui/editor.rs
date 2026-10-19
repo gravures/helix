@@ -1785,8 +1785,6 @@ impl Component for EditorView {
             _ => false,
         };
 
-        let render_breadcrumb = config.breadcrumb.enable;
-
         let mut area = area;
 
         // TODO: This may need to get looked at!
@@ -1814,16 +1812,6 @@ impl Component for EditorView {
 
         if use_bufferline {
             Self::render_bufferline(cx.editor, area.with_height(1), surface);
-        }
-
-        if render_breadcrumb {
-            let area = area
-                .with_height(1)
-                // Position it at y=1 if bufferline is used, otherwise y=0
-                .with_y(if use_bufferline { area.y + 1 } else { area.y })
-                // Adds padding to the start of the breadcrumb.
-                .clip_left(1);
-            Self::render_breadcrumb(cx.editor, area, surface);
         }
 
         let views: Vec<(ViewId, bool)> = {
