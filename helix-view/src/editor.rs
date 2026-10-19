@@ -11,7 +11,7 @@ use crate::{
     input::KeyEvent,
     register::Registers,
     theme::{self, Theme},
-    tree::{self, Tree},
+    tree::{self, Dimension, Resize, Tree},
     Document, DocumentId, View, ViewId,
 };
 use helix_event::dispatch;
