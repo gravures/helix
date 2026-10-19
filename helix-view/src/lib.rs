@@ -1,6 +1,7 @@
 #[macro_use]
 pub mod macros;
 
+pub mod action;
 pub mod annotations;
 pub mod clipboard;
 pub mod document;
@@ -17,6 +18,8 @@ pub mod register;
 pub mod theme;
 pub mod tree;
 pub mod view;
+
+pub mod extension;
 
 use std::num::NonZeroUsize;
 

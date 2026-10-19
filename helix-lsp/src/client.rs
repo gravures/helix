@@ -66,6 +66,8 @@ pub struct Client {
     root_uri: Option<lsp::Url>,
     workspace_folders: Mutex<Vec<lsp::WorkspaceFolder>>,
     initialize_notify: Arc<Notify>,
+    /// Notified by the transport once `exit` has been flushed to the server's stdin.
+    shutdown_flushed: Arc<Notify>,
     /// workspace folders added while the server is still initializing
     req_timeout: u64,
 }
@@ -243,7 +245,7 @@ impl Client {
         let reader = BufReader::new(process.stdout.take().expect("Failed to open stdout"));
         let stderr = BufReader::new(process.stderr.take().expect("Failed to open stderr"));
 
-        let (server_rx, server_tx, initialize_notify) =
+        let (server_rx, server_tx, initialize_notify, shutdown_flushed) =
             Transport::start(reader, writer, stderr, id, name.clone());
 
         let workspace_folders = root_uri
@@ -265,6 +267,7 @@ impl Client {
             root_uri,
             workspace_folders: Mutex::new(workspace_folders),
             initialize_notify: initialize_notify.clone(),
+            shutdown_flushed,
         };
 
         Ok((client, server_rx, initialize_notify))
@@ -788,13 +791,37 @@ impl Client {
         Ok(())
     }
 
-    /// Forcefully shuts down the language server ignoring any errors.
-    pub async fn force_shutdown(&self) -> Result<()> {
-        if let Err(e) = self.shutdown().await {
-            log::warn!("language server failed to terminate gracefully - {}", e);
-        }
+    /// Sends the LSP shutdown request followed immediately by the exit
+    /// notification, without waiting for the shutdown response (fire-and-forget).
+    /// The server receives both in order and exits on its own; any late shutdown
+    /// response is discarded. Quitting therefore never blocks on a slow server
+    /// (e.g. gopls flushing ~1k log messages before it would answer `shutdown`).
+    ///
+    /// The child process is not waited on here: it is killed by `kill_on_drop`
+    /// when this `Client` is dropped. `close_language_servers` first gives a short
+    /// grace window so the `exit` reaches stdin and well-behaved servers can begin
+    /// exiting before the kill.
+    pub fn force_shutdown(&self) {
+        let request = jsonrpc::MethodCall {
+            jsonrpc: Some(jsonrpc::Version::V2),
+            id: self.next_request_id(),
+            method: <lsp::request::Shutdown as lsp::request::Request>::METHOD.to_string(),
+            params: jsonrpc::Params::None,
+        };
+        // The response receiver is dropped immediately; we do not wait for a reply.
+        let (chan, _) = tokio::sync::mpsc::channel(1);
+        let _ = self.server_tx.send(Payload::Request {
+            chan,
+            value: request,
+        });
         self.exit();
-        Ok(())
+    }
+
+    /// Resolves once the `exit` notification has been written to the server's stdin
+    /// (i.e. helix's *outbound* write completed — independent of how slow the server
+    /// is, since it doesn't wait for any server response).
+    pub async fn wait_shutdown_flushed(&self) {
+        self.shutdown_flushed.notified().await;
     }
 
     // -------------------------------------------------------------------------------------------
@@ -1786,4 +1813,91 @@ impl Client {
             changes,
         })
     }
+
+    // Everything below is explicitly extensions used for handling non standard lsp commands
+    #[cfg(feature = "steel")]
+    pub fn non_standard_extension(
+        &self,
+        method_name: String,
+        params: Option<Value>,
+    ) -> Option<impl Future<Output = Result<Value>>> {
+        Some(self.call_non_standard(DynamicLspRequest {
+            method_name,
+            params,
+        }))
+    }
+
+    #[cfg(feature = "steel")]
+    fn call_non_standard(&self, request: DynamicLspRequest) -> impl Future<Output = Result<Value>> {
+        self.call_non_standard_with_timeout(request, self.req_timeout)
+    }
+
+    #[cfg(feature = "steel")]
+    fn call_non_standard_with_timeout(
+        &self,
+        request: DynamicLspRequest,
+        timeout_secs: u64,
+    ) -> impl Future<Output = Result<Value>> {
+        let server_tx = self.server_tx.clone();
+        let id = self.next_request_id();
+
+        let rx = serde_json::to_value(&request.params)
+            .map_err(Error::from)
+            .and_then(|params| {
+                let request = jsonrpc::MethodCall {
+                    jsonrpc: Some(jsonrpc::Version::V2),
+                    id: id.clone(),
+                    method: request.method_name,
+                    params: Self::value_into_params(params),
+                };
+
+                let (tx, rx) = channel::<Result<Value>>(1);
+
+                server_tx
+                    .send(Payload::Request {
+                        chan: tx,
+                        value: request,
+                    })
+                    .map_err(|e| Error::Other(e.into()))?;
+                Ok(rx)
+            });
+
+        async move {
+            use std::time::Duration;
+            use tokio::time::timeout;
+
+            // TODO: delay other calls until initialize success
+            timeout(Duration::from_secs(timeout_secs), rx?.recv())
+                .await
+                .map_err(|_| Error::Timeout(id))? // return Timeout
+                .ok_or(Error::StreamClosed)?
+        }
+    }
+
+    /// Send a custom RPC notification with arbitrary method and params to the language server.
+    #[cfg(feature = "steel")]
+    pub fn send_custom_notification(&self, method: String, params: Option<Value>) -> Result<()> {
+        let server_tx = self.server_tx.clone();
+
+        let params = params.unwrap_or(Value::Null);
+
+        let notification = jsonrpc::Notification {
+            jsonrpc: Some(jsonrpc::Version::V2),
+            method,
+            params: Self::value_into_params(params),
+        };
+
+        server_tx
+            .send(Payload::Notification(notification))
+            .map_err(|e| Error::Other(e.into()))?;
+
+        Ok(())
+    }
+}
+
+#[cfg(feature = "steel")]
+#[derive(serde::Serialize, Deserialize)]
+pub struct DynamicLspRequest {
+    method_name: String,
+    params: Option<Value>,
 }

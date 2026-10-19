@@ -16,7 +16,7 @@ use helix_event::TaskController;
 use helix_lsp::util::lsp_pos_to_pos;
 use helix_stdx::faccess::{copy_metadata, readonly};
 use helix_vcs::{DiffHandle, DiffProviderRegistry};
-use once_cell::sync::OnceCell;
+use std::sync::OnceLock;
 use thiserror;
 
 use ::parking_lot::Mutex;
@@ -24,7 +24,7 @@ use serde::de::{self, Deserialize, Deserializer};
 use serde::Serialize;
 use std::borrow::Cow;
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::future::Future;
 use std::io;
@@ -153,12 +153,19 @@ pub struct Document {
     pub(crate) jump_labels: HashMap<ViewId, Vec<Overlay>>,
     /// LSP document highlights for each view, stored as char ranges.
     pub(crate) document_highlights: HashMap<ViewId, DocumentHighlights>,
+    /// LSP code action hints for each view.
+    pub(crate) code_action_hints: HashSet<ViewId>,
     /// Set to `true` when the document is updated, reset to `false` on the next inlay hints
     /// update from the LSP
     pub inlay_hints_oudated: bool,
 
     path: Option<PathBuf>,
-    relative_path: OnceCell<Option<PathBuf>>,
+    relative_path: OnceLock<Option<PathBuf>>,
+    /// Lazily-computed workspace root for this document (the ancestor that contains a `.git` /
+    /// `.svn` / `.jj` / `.helix`). Avoids per-call `find_workspace_in` ancestor walks for hot
+    /// consumers like the statusline trust indicator, LSP launch, and DAP launch. Taken in
+    /// `set_path` so save-as recomputes.
+    workspace_root: OnceLock<PathBuf>,
     encoding: &'static encoding::Encoding,
     has_bom: bool,
 
@@ -205,6 +212,8 @@ pub struct Document {
     // when document was used for most-recent-used buffer picker
     pub focused_at: std::time::Instant,
 
+    // A name separate from the file name
+    pub name: Option<String>,
     pub readonly: bool,
 
     pub previous_diagnostic_ids: HashMap<LanguageServerId, String>,
@@ -216,8 +225,13 @@ pub struct Document {
     // NOTE: ideally this would live on the handler for color swatches. This is blocked on a
     // large refactor that would make `&mut Editor` available on the `DocumentDidChange` event.
     pub color_swatch_controller: TaskController,
+
+    pub uri: Option<Box<Url>>,
+
     /// Per-view task controllers for canceling in-flight document highlight requests.
     pub document_highlight_controllers: HashMap<ViewId, TaskController>,
+    /// Per-view task controllers for canceling in-flight code action requests.
+    pub code_action_controllers: HashMap<ViewId, TaskController>,
     pub pull_diagnostic_controller: TaskController,
     pub document_link_controller: TaskController,
 
@@ -727,7 +741,8 @@ impl Document {
             id: DocumentId::default(),
             active_snippet: None,
             path: None,
-            relative_path: OnceCell::new(),
+            relative_path: OnceLock::new(),
+            workspace_root: OnceLock::new(),
             encoding,
             has_bom,
             text,
@@ -755,14 +770,18 @@ impl Document {
             config,
             version_control_head: None,
             focused_at: std::time::Instant::now(),
+            name: None,
             readonly: false,
             jump_labels: HashMap::new(),
             document_highlights: HashMap::new(),
+            code_action_hints: HashSet::new(),
             color_swatches: None,
             document_links: Vec::new(),
             color_swatch_controller: TaskController::new(),
             is_welcome: false,
+            uri: None,
             document_highlight_controllers: HashMap::new(),
+            code_action_controllers: HashMap::new(),
             syn_loader,
             previous_diagnostic_ids: HashMap::new(),
             pull_diagnostic_controller: TaskController::new(),
@@ -1246,6 +1265,10 @@ impl Document {
         }
     }
 
+    pub fn last_saved_time(&self) -> SystemTime {
+        self.last_saved_time
+    }
+
     pub fn pickup_last_saved_time(&mut self) {
         self.last_saved_time = match self.path() {
             Some(path) => match path.metadata() {
@@ -1279,6 +1302,7 @@ impl Document {
         &mut self,
         view: &mut View,
         provider_registry: &DiffProviderRegistry,
+        trust_full: bool,
     ) -> Result<(), Error> {
         let encoding = self.encoding;
         let path = match self.path() {
@@ -1305,12 +1329,12 @@ impl Document {
         self.pickup_last_saved_time();
         self.detect_indent_and_line_ending();
 
-        match provider_registry.get_diff_base(&path) {
+        match provider_registry.get_diff_base(&path, trust_full) {
             Some(diff_base) => self.set_diff_base(diff_base),
             None => self.diff_handle = None,
         }
 
-        self.version_control_head = provider_registry.get_current_head_name(&path);
+        self.version_control_head = provider_registry.get_current_head_name(&path, trust_full);
 
         Ok(())
     }
@@ -1339,6 +1363,8 @@ impl Document {
         // `take` to remove any prior relative path that may have existed.
         // This will get set in `relative_path()`.
         self.relative_path.take();
+        // Same story: invalidate so the next workspace_root() recomputes against the new path.
+        self.workspace_root.take();
 
         // if parent doesn't exist we still want to open the document
         // and error out when document is saved
@@ -1437,6 +1463,8 @@ impl Document {
         self.jump_labels.remove(&view_id);
         self.document_highlights.remove(&view_id);
         self.document_highlight_controllers.remove(&view_id);
+        self.code_action_hints.remove(&view_id);
+        self.code_action_controllers.remove(&view_id);
     }
 
     /// Apply a [`Transaction`] to the [`Document`] to change its text.
@@ -1929,6 +1957,20 @@ impl Document {
             .unwrap_or_else(|| self.config.load().path_completion)
     }
 
+    #[cfg(feature = "steel")]
+    pub fn arc_language_servers(&self) -> impl Iterator<Item = Arc<helix_lsp::Client>> + use<'_> {
+        self.language_config().into_iter().flat_map(move |config| {
+            config.language_servers.iter().filter_map(move |features| {
+                let ls = self.language_servers.get(&features.name)?.clone();
+                if ls.is_initialized() {
+                    Some(ls)
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
     /// maintains the order as configured in the language_servers TOML array
     pub fn language_servers(&self) -> impl Iterator<Item = &helix_lsp::Client> {
         self.language_config().into_iter().flat_map(move |config| {
@@ -1968,6 +2010,12 @@ impl Document {
 
     pub fn supports_language_server(&self, id: LanguageServerId) -> bool {
         self.language_servers().any(|l| l.id() == id)
+    }
+
+    pub fn servers_to_load(&self) -> bool {
+        self.language_config()
+            .map(|lang| !lang.language_servers.is_empty() || lang.debugger.is_some())
+            .unwrap_or(false)
     }
 
     pub fn diff_handle(&self) -> Option<&DiffHandle> {
@@ -2047,7 +2095,10 @@ impl Document {
 
     /// File path as a URL.
     pub fn url(&self) -> Option<Url> {
-        Url::from_file_path(self.path()?).ok()
+        self.uri
+            .as_ref()
+            .map(|x| *x.clone())
+            .or_else(|| Url::from_file_path(self.path()?).ok())
     }
 
     pub fn uri(&self) -> Option<helix_core::Uri> {
@@ -2101,9 +2152,25 @@ impl Document {
             .as_deref()
     }
 
+    /// The workspace root for this document — the nearest ancestor that contains a `.git`, `.svn`,
+    /// `.jj`, or `.helix`. Falls back to the current working directory's workspace when the
+    /// document has no path (scratch buffers). Lazily memoised on first call.
+    pub fn workspace_root(&self) -> &Path {
+        self.workspace_root
+            .get_or_init(|| match self.path.as_deref() {
+                Some(p) => p
+                    .parent()
+                    .map(|dir| helix_loader::find_workspace_in(dir).0)
+                    .unwrap_or_else(|| helix_loader::find_workspace().0),
+                None => helix_loader::find_workspace().0,
+            })
+    }
+
     pub fn display_name(&self) -> Cow<'_, str> {
         self.relative_path()
-            .map_or_else(|| SCRATCH_BUFFER_NAME.into(), |path| path.to_string_lossy())
+            .map(|path| path.to_string_lossy().to_string().into())
+            .or_else(|| self.name.as_ref().map(|x| Cow::Owned(x.clone())))
+            .unwrap_or_else(|| SCRATCH_BUFFER_NAME.into())
     }
 
     // transact(Fn) ?
@@ -2425,6 +2492,27 @@ impl Document {
         self.document_highlight_controllers
             .entry(view_id)
             .or_default()
+    }
+
+    pub fn set_code_action_hints(&mut self, view_id: ViewId) {
+        self.code_action_hints.insert(view_id);
+    }
+
+    pub fn clear_code_action_hints(&mut self, view_id: ViewId) {
+        self.code_action_hints.remove(&view_id);
+    }
+
+    pub fn clear_all_code_action_hints(&mut self) {
+        self.code_action_hints.clear();
+        self.code_action_controllers.clear();
+    }
+
+    pub fn code_action_hints(&self, view_id: ViewId) -> bool {
+        self.code_action_hints.contains(&view_id)
+    }
+
+    pub fn code_action_controller(&mut self, view_id: ViewId) -> &mut TaskController {
+        self.code_action_controllers.entry(view_id).or_default()
     }
 
     /// Get the inlay hints for this document and `view_id`.

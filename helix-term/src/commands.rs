@@ -1,4 +1,5 @@
 pub(crate) mod dap;
+pub(crate) mod engine;
 pub(crate) mod lsp;
 pub(crate) mod syntax;
 pub(crate) mod typed;
@@ -12,7 +13,10 @@ use helix_stdx::{
 };
 use helix_vcs::{FileChange, Hunk};
 pub use lsp::*;
+
+pub use engine::ScriptingEngine;
 pub use syntax::*;
+
 use tui::{
     text::{Span, Spans},
     widgets::Cell,
@@ -87,8 +91,8 @@ use std::{
 };
 
 use helix_stdx::Url;
-use once_cell::sync::Lazy;
 use serde::de::{self, Deserialize, Deserializer};
+use std::sync::LazyLock;
 
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{sinks, BinaryDetection, SearcherBuilder};
@@ -249,6 +253,14 @@ impl MappableCommand {
     pub fn execute(&self, cx: &mut Context) {
         match &self {
             Self::Typable { name, args, doc: _ } => {
+                // Check the engine first to see if there has been any shadowing of built ins
+                if ScriptingEngine::function_exists(name) {
+                    let scripting_args = args.split_whitespace().map(Cow::from).collect();
+                    if ScriptingEngine::call_function_by_name(cx, name, scripting_args) {
+                        return;
+                    }
+                }
+
                 if let Some(command) = typed::TYPABLE_COMMAND_MAP.get(name.as_str()) {
                     let mut cx = compositor::Context {
                         editor: cx.editor,
@@ -298,6 +310,15 @@ impl MappableCommand {
             Self::Typable { doc, .. } => doc,
             Self::Static { doc, .. } => doc,
             Self::Macro { name, .. } => name,
+        }
+    }
+
+    #[cfg(feature = "steel")]
+    pub(crate) fn doc_mut(&mut self) -> Option<&mut String> {
+        if let Self::Typable { doc, .. } = self {
+            Some(doc)
+        } else {
+            None
         }
     }
 
@@ -652,21 +673,19 @@ impl std::str::FromStr for MappableCommand {
         if let Some(suffix) = s.strip_prefix(':') {
             let (name, args, _) = command_line::split(suffix);
             ensure!(!name.is_empty(), "Expected typable command name");
-            typed::TYPABLE_COMMAND_MAP
+            let typable = typed::TYPABLE_COMMAND_MAP
                 .get(name)
-                .map(|cmd| {
-                    let doc = if args.is_empty() {
-                        cmd.doc.to_string()
-                    } else {
-                        format!(":{} {:?}", cmd.name, args)
-                    };
-                    MappableCommand::Typable {
-                        name: cmd.name.to_owned(),
-                        doc,
-                        args: args.to_string(),
-                    }
+                .map(|cmd| MappableCommand::Typable {
+                    name: cmd.name.to_owned(),
+                    doc: format!(":{} {:?}", cmd.name, args),
+                    args: args.to_owned(),
                 })
-                .ok_or_else(|| anyhow!("No TypableCommand named '{}'", s))
+                .unwrap_or_else(|| MappableCommand::Typable {
+                    name: name.to_owned(),
+                    args: args.to_owned(),
+                    doc: "Undocumented plugin command".to_string(),
+                });
+            Ok(typable)
         } else if let Some(suffix) = s.strip_prefix('@') {
             helix_view::input::parse_macro(suffix).map(|keys| Self::Macro {
                 name: s.to_string(),
@@ -3119,7 +3138,14 @@ fn enter_insert_mode(cx: &mut Context) {
 // inserts at the start of each selection
 fn insert_mode(cx: &mut Context) {
     enter_insert_mode(cx);
-    let (view, doc) = current!(cx.editor);
+
+    // TODO: @Matt
+    // Could be called during bootup which panics the editor - a better
+    // thing might be to either call startup _after_ the documents have
+    // been opened?
+    let Some((view, doc)) = try_current!(cx.editor) else {
+        return;
+    };
 
     log::trace!(
         "entering insert mode with sel: {:?}, text: {:?}",
@@ -3560,10 +3586,18 @@ fn changed_file_picker(cx: &mut Context) {
     .with_preview(|_editor, meta| Some((meta.path().into(), None)));
     let injector = picker.injector();
 
+    let trust_full = cx
+        .editor
+        .workspace_trust
+        .query(
+            &helix_loader::find_workspace_in(&cwd).0,
+            helix_loader::workspace_trust::TrustQuery::Git,
+        )
+        .is_trusted();
     cx.editor
         .diff_providers
         .clone()
-        .for_each_changed_file(cwd, move |change| match change {
+        .for_each_changed_file(cwd, trust_full, move |change| match change {
             Ok(change) => injector.push(change).is_ok(),
             Err(err) => {
                 status::report_blocking(err);
@@ -3583,15 +3617,27 @@ pub fn command_palette(cx: &mut Context) {
                 [&cx.editor.mode]
                 .reverse_map();
 
-            let commands = MappableCommand::STATIC_COMMAND_LIST.iter().cloned().chain(
-                typed::TYPABLE_COMMAND_LIST
-                    .iter()
-                    .map(|cmd| MappableCommand::Typable {
-                        name: cmd.name.to_owned(),
+            let commands = MappableCommand::STATIC_COMMAND_LIST
+                .iter()
+                .cloned()
+                .chain(
+                    typed::TYPABLE_COMMAND_LIST
+                        .iter()
+                        .map(|cmd| MappableCommand::Typable {
+                            name: cmd.name.to_owned(),
+                            args: String::new(),
+                            doc: cmd.doc.to_owned(),
+                        }),
+                )
+                .chain(ScriptingEngine::available_commands().into_iter().map(|x| {
+                    let doc = ScriptingEngine::get_doc_for_identifier(&x).unwrap_or_default();
+
+                    MappableCommand::Typable {
+                        name: x.into_owned(),
                         args: String::new(),
-                        doc: cmd.doc.to_owned(),
-                    }),
-            );
+                        doc,
+                    }
+                }));
 
             let columns = [
                 ui::PickerColumn::new("name", |item, _| match item {
@@ -3817,6 +3863,29 @@ pub enum CommentContinuation {
     Disabled,
 }
 
+fn continued_line_comment_token<'a>(
+    doc: &'a Document,
+    loader: &'a helix_core::syntax::Loader,
+    text: RopeSlice,
+    line_num: usize,
+    byte_pos: usize,
+) -> Option<&'a str> {
+    if let Some(syntax) = doc.syntax() {
+        let mut token = None;
+        for layer in syntax.layers_for_byte_range(byte_pos as u32, byte_pos as u32) {
+            let config = loader.language(syntax.layer(layer).language).config();
+            if let Some(tokens) = config.comment_tokens.as_ref() {
+                token = comment::get_comment_token(text, tokens, line_num).or(token);
+            }
+        }
+        token
+    } else {
+        doc.language_config()
+            .and_then(|config| config.comment_tokens.as_ref())
+            .and_then(|tokens| comment::get_comment_token(text, tokens, line_num))
+    }
+}
+
 fn open(cx: &mut Context, open: Open, comment_continuation: CommentContinuation) {
     let count = cx.count();
     enter_insert_mode(cx);
@@ -3852,9 +3921,9 @@ fn open(cx: &mut Context, open: Open, comment_continuation: CommentContinuation)
                 text.line(curr_line_num)
                     .first_non_whitespace_char()
                     .map(|c| text.char_to_byte(text.line_to_char(curr_line_num) + c))
-                    .and_then(|byte| doc.language_config_at(&loader, byte))
-                    .and_then(|config| config.comment_tokens.as_ref())
-                    .and_then(|tokens| comment::get_comment_token(text, tokens, curr_line_num))
+                    .and_then(|byte| {
+                        continued_line_comment_token(doc, &loader, text, curr_line_num, byte)
+                    })
             } else {
                 None
             };
@@ -4481,9 +4550,9 @@ pub mod insert {
                 text.line(current_line)
                     .first_non_whitespace_char()
                     .map(|c| text.char_to_byte(line_start + c))
-                    .and_then(|byte| doc.language_config_at(&loader, byte))
-                    .and_then(|config| config.comment_tokens.as_ref())
-                    .and_then(|tokens| comment::get_comment_token(text, tokens, current_line))
+                    .and_then(|byte| {
+                        continued_line_comment_token(doc, &loader, text, current_line, byte)
+                    })
             } else {
                 None
             };
@@ -4905,7 +4974,7 @@ pub(crate) enum Paste {
     Cursor,
 }
 
-static LINE_ENDING_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\r\n|\r|\n").unwrap());
+static LINE_ENDING_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\r\n|\r|\n").unwrap());
 
 fn paste_impl(
     values: &[String],

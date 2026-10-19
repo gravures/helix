@@ -3,6 +3,7 @@ use helix_loader::VERSION_AND_GIT_HASH;
 use helix_term::application::Application;
 use helix_term::args::Args;
 use helix_term::config::{Config, ConfigLoadError};
+use indexmap::map::MutableKeys;
 
 fn setup_logging(verbosity: u64) -> Result<()> {
     let level = match verbosity {
@@ -24,7 +25,7 @@ fn main() -> Result<()> {
 
 #[tokio::main]
 async fn main_impl() -> Result<i32> {
-    let args = Args::parse_args().context("could not parse arguments")?;
+    let mut args = Args::parse_args().context("could not parse arguments")?;
 
     helix_loader::initialize_config_file(args.config_file.clone());
     helix_loader::initialize_log_file(args.log_file.clone());
@@ -102,6 +103,11 @@ FLAGS:
 
     setup_logging(args.verbosity).context("failed to initialize logging")?;
 
+    // Before setting the working directory, resolve all the paths in args.files
+    for (path, _) in args.files.iter_mut2() {
+        *path = helix_stdx::path::canonicalize(&*path);
+    }
+
     // NOTE: Set the working directory early so the correct configuration is loaded. Be aware that
     // Application::new() depends on this logic so it must be updated if this changes.
     if let Some(path) = &args.working_directory {
@@ -130,8 +136,11 @@ FLAGS:
         }
     };
 
+    let workspace_trust =
+        helix_loader::workspace_trust::WorkspaceTrust::new((&config.editor.workspace_trust).into());
+
     let lang_loader =
-        helix_core::config::user_lang_loader(config.editor.insecure).unwrap_or_else(|err| {
+        helix_core::config::user_lang_loader(&workspace_trust).unwrap_or_else(|err| {
             eprintln!("{}", err);
             eprintln!("Press <ENTER> to continue with default language config");
             use std::io::Read;
@@ -141,7 +150,8 @@ FLAGS:
         });
 
     // TODO: use the thread local executor to spawn the application task separately from the work pool
-    let mut app = Application::new(args, config, lang_loader).context("unable to start Helix")?;
+    let mut app = Application::new(args, config, lang_loader, workspace_trust)
+        .context("unable to start Helix")?;
     let mut events = app.event_stream();
 
     let exit_code = app.run(&mut events).await?;

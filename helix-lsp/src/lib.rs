@@ -486,6 +486,8 @@ pub enum MethodCall {
     RegisterCapability(lsp::RegistrationParams),
     UnregisterCapability(lsp::UnregistrationParams),
     ShowDocument(lsp::ShowDocumentParams),
+    // Other kind specifically for extensions
+    Other(String, jsonrpc::Params),
     WorkspaceDiagnosticRefresh,
     ShowMessageRequest(lsp::ShowMessageRequestParams),
 }
@@ -524,9 +526,7 @@ impl MethodCall {
                 let params: lsp::ShowMessageRequestParams = params.parse()?;
                 Self::ShowMessageRequest(params)
             }
-            _ => {
-                return Err(Error::Unhandled);
-            }
+            _ => Self::Other(method.to_owned(), params),
         };
         Ok(request)
     }
@@ -542,6 +542,8 @@ pub enum Notification {
     ShowMessage(lsp::ShowMessageParams),
     LogMessage(lsp::LogMessageParams),
     ProgressMessage(lsp::ProgressParams),
+    // Other kind specifically for extensions
+    Other(String, jsonrpc::Params),
 }
 
 impl Notification {
@@ -568,9 +570,7 @@ impl Notification {
                 let params: lsp::ProgressParams = params.parse()?;
                 Self::ProgressMessage(params)
             }
-            _ => {
-                return Err(Error::Unhandled);
-            }
+            _ => Self::Other(method.to_owned(), params),
         };
 
         Ok(notification)
@@ -667,9 +667,7 @@ impl Registry {
             for old_client in old_clients {
                 self.file_event_handler.remove_client(old_client.id());
                 self.inner.remove(old_client.id());
-                tokio::spawn(async move {
-                    let _ = old_client.force_shutdown().await;
-                });
+                old_client.force_shutdown();
             }
         }
         let client = match self.start_client(
@@ -699,9 +697,7 @@ impl Registry {
             for client in clients.drain(..) {
                 self.file_event_handler.remove_client(client.id());
                 self.inner.remove(client.id());
-                tokio::spawn(async move {
-                    let _ = client.force_shutdown().await;
-                });
+                client.force_shutdown();
             }
         }
     }

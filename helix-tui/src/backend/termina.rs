@@ -278,7 +278,10 @@ impl TerminaBackend {
     }
 
     fn disable_mouse_capture(&mut self) -> io::Result<()> {
-        if self.config.enable_mouse_capture {
+        // If we don't do this, then disabling mouse support
+        // at runtime fails, since mouse capture is now "disabled",
+        // and then on exit the terminal is still capturing things.
+        if self.config.enable_mouse_capture || cfg!(feature = "steel") {
             write!(
                 self.terminal,
                 "{}{}{}{}{}",
@@ -474,8 +477,6 @@ impl Backend for TerminaBackend {
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
-        self.start_synchronized_render()?;
-
         let mut fg = Color::Reset;
         let mut bg = Color::Reset;
         let mut underline_color = Color::Reset;
@@ -553,14 +554,11 @@ impl Backend for TerminaBackend {
 
         write!(self.terminal, "{}", Csi::Sgr(csi::Sgr::Reset))?;
 
-        self.end_sychronized_render()?;
-
         Ok(())
     }
 
     fn hide_cursor(&mut self) -> io::Result<()> {
-        write!(self.terminal, "{}", decreset!(ShowCursor))?;
-        self.flush()
+        write!(self.terminal, "{}", decreset!(ShowCursor))
     }
 
     fn show_cursor(&mut self, kind: CursorKind) -> io::Result<()> {
@@ -575,8 +573,7 @@ impl Backend for TerminaBackend {
             "{}{}",
             decset!(ShowCursor),
             Csi::Cursor(csi::Cursor::CursorStyle(style)),
-        )?;
-        self.flush()
+        )
     }
 
     fn set_cursor(&mut self, x: u16, y: u16) -> io::Result<()> {
@@ -586,18 +583,23 @@ impl Backend for TerminaBackend {
             self.terminal,
             "{}",
             Csi::Cursor(csi::Cursor::Position { line, col })
-        )?;
-        self.flush()
+        )
     }
 
     fn clear(&mut self) -> io::Result<()> {
-        self.start_synchronized_render()?;
         write!(
             self.terminal,
             "{}",
             Csi::Edit(csi::Edit::EraseInDisplay(csi::EraseInDisplay::EraseDisplay))
-        )?;
-        self.flush()
+        )
+    }
+
+    fn start_sync(&mut self) -> io::Result<()> {
+        self.start_synchronized_render()
+    }
+
+    fn end_sync(&mut self) -> io::Result<()> {
+        self.end_sychronized_render()
     }
 
     fn size(&self) -> io::Result<Rect> {
