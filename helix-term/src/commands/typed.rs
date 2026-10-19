@@ -1,6 +1,5 @@
 use std::io::BufReader;
 use std::ops::{self, Deref};
-use std::sync::Arc;
 
 use crate::job::Job;
 
@@ -1131,7 +1130,7 @@ fn theme(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow
                     if !(true_color || theme.is_16_color()) {
                         bail!("Unsupported theme: theme requires true color support");
                     }
-                    cx.editor.set_theme_preview(Arc::from(theme))?;
+                    cx.editor.set_theme_preview(theme)?;
                 }
             }
         }
@@ -1146,7 +1145,7 @@ fn theme(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow
                 if !(true_color || theme.is_16_color()) {
                     bail!("Unsupported theme: theme requires true color support");
                 }
-                cx.editor.set_theme(Arc::from(theme))?;
+                cx.editor.set_theme(theme)?;
             } else {
                 let name = cx.editor.theme.name().to_string();
 

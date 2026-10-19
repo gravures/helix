@@ -2098,8 +2098,8 @@ version = "25.7.1"
 name = "helix-stdx"
 version = "25.7.1"
 dependencies = [
- "arrayvec",
- "bitflags",
+ "arrayvec 0.7.7",
+ "bitflags 2.13.0",
  "dunce",
  "etcetera",
  "percent-encoding",
@@ -2224,14 +2224,15 @@ dependencies = [
  "kstring",
  "libc",
  "log",
+ "once_cell",
  "parking_lot",
  "quickcheck",
  "rustix 1.1.4",
  "serde",
  "serde_json",
  "slotmap",
- "steel-core",
  "smartstring",
+ "steel-core",
  "tempfile",
  "termina",
  "thiserror",

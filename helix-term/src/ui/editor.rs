@@ -691,7 +691,7 @@ impl EditorView {
     /// Render bufferline at the top
     #[allow(clippy::too_many_lines)]
     pub fn render_bufferline(editor: &Editor, viewport: Rect, surface: &mut Surface) {
-        let theme = editor.theme.as_ref();
+        let theme = &editor.theme;
 
         let scratch = PathBuf::from(SCRATCH_BUFFER_NAME); // default filename to use for scratch buffer
 

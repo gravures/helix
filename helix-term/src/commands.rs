@@ -84,7 +84,6 @@ use std::{
     future::Future,
     io::Read,
     num::NonZeroUsize,
-    sync::Arc,
 };
 
 use std::{
@@ -2606,7 +2605,7 @@ fn global_search(cx: &mut Context) {
     struct GlobalSearchConfig {
         smart_case: bool,
         file_picker_config: helix_view::editor::FilePickerConfig,
-        theme: Arc<Theme>,
+        theme: Theme,
     }
 
     let config = cx.editor.config();
@@ -2618,7 +2617,7 @@ fn global_search(cx: &mut Context) {
 
     let columns = [
         PickerColumn::new("path", |item: &FileResult, config: &GlobalSearchConfig| {
-            let theme = config.theme.as_ref();
+            let theme = &config.theme;
 
             let path = helix_stdx::path::get_relative_path(item.path.as_ref());
 
@@ -3373,7 +3372,7 @@ fn buffer_picker(cx: &mut Context) {
             }
             flags.into()
         }),
-        PickerColumn::new("path", |meta: &BufferMeta, theme: &Arc<Theme>| {
+        PickerColumn::new("path", |meta: &BufferMeta, theme: &Theme| {
             let path = meta
                 .path
                 .as_deref()
@@ -3479,7 +3478,7 @@ fn jumplist_picker(cx: &mut Context) {
 
     let columns = [
         ui::PickerColumn::new("id", |item: &JumpMeta, _| item.id.to_string().into()),
-        ui::PickerColumn::new("path", |meta: &JumpMeta, theme: &Arc<Theme>| {
+        ui::PickerColumn::new("path", |meta: &JumpMeta, theme: &Theme| {
             let path = meta
                 .path
                 .as_deref()

@@ -524,14 +524,14 @@ fn render_file_type<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    let theme = context.editor.theme.as_ref();
+    let theme = &context.editor.theme;
     let icons = ICONS.load();
 
-    let lang = context.doc.language_name().unwrap_or(DEFAULT_LANGUAGE_NAME);
-    let path = context.doc.path();
+    let lang = get_doc(context).language_name().unwrap_or(DEFAULT_LANGUAGE_NAME).to_owned();
+    let path = get_doc(context).path().map(|p| p.to_path_buf());
 
     if let Some(file) = icons.fs().file() {
-        if let Some(path) = path {
+        if let Some(path) = &path {
             let icon = file.get_with_style_or_default(path, theme);
             write(context, Span::from(icon));
             write(context, Span::from(format!("{lang} ")));
@@ -578,7 +578,7 @@ fn render_file_modification_indicator<'a, F>(context: &mut RenderContext<'a>, wr
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    if context.doc.is_modified() {
+    if get_doc(context).is_modified() {
         let icons = ICONS.load();
         let icon = icons.ui().indicator().modified();
         write(context, Span::from(icon));
@@ -591,7 +591,7 @@ fn render_read_only_indicator<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    if context.doc.readonly {
+    if get_doc(context).readonly {
         let icons = ICONS.load();
         let icon = icons.ui().indicator().readonly();
         write(context, Span::from(icon));
@@ -639,11 +639,11 @@ fn render_version_control<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    let head = context.doc.version_control_head().unwrap_or_default();
+    let head = get_doc(context).version_control_head().unwrap_or_default();
     if !head.is_empty() {
         let icons = ICONS.load();
 
-        let theme = context.editor.theme.as_ref();
+        let theme = &context.editor.theme;
         let style = theme
             .try_get_exact("ui.statusline.version-control")
             .unwrap_or_default();

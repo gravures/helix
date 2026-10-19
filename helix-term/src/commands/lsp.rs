@@ -42,7 +42,6 @@ use std::{
     fmt::Display,
     future::Future,
     path::Path,
-    sync::Arc,
 };
 
 /// Gets the first language server that is attached to a document which supports a specific feature.
@@ -397,7 +396,7 @@ pub fn symbol_picker(cx: &mut Context) {
             let columns = [
                 ui::PickerColumn::new(
                     "kind",
-                    |item: &SymbolInformationItem, theme: &Arc<Theme>| {
+                    |item: &SymbolInformationItem, theme: &Theme| {
                         let name = item.symbol.kind.as_str();
                         let icons = ICONS.load();
 
@@ -539,7 +538,7 @@ pub fn workspace_symbol_picker(cx: &mut Context) {
     let columns = [
         ui::PickerColumn::new(
             "kind",
-            |item: &SymbolInformationItem, theme: &Arc<Theme>| {
+            |item: &SymbolInformationItem, theme: &Theme| {
                 let name = item.symbol.kind.as_str();
                 let icons = ICONS.load();
 

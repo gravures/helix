@@ -38,7 +38,6 @@ use tui::widgets::Cell;
 
 use std::borrow::Cow;
 use std::path::Path;
-use std::sync::Arc;
 use std::{error::Error, path::PathBuf};
 
 struct Utf8PathBuf {
@@ -217,7 +216,7 @@ fn get_excluded_types() -> ignore::types::Types {
 #[derive(Debug)]
 pub struct FilePickerData {
     root: PathBuf,
-    theme: Arc<Theme>,
+    theme: Theme,
 }
 type FilePicker = Picker<PathBuf, FilePickerData>;
 
@@ -266,7 +265,7 @@ pub fn file_picker(editor: &Editor, root: PathBuf) -> FilePicker {
     let columns = [PickerColumn::new(
         "path",
         |item: &PathBuf, data: &FilePickerData| {
-            let theme = data.theme.as_ref();
+            let theme = &data.theme;
 
             let path = item.strip_prefix(&data.root).unwrap_or(item);
 
@@ -335,14 +334,14 @@ pub fn file_picker(editor: &Editor, root: PathBuf) -> FilePicker {
     picker
 }
 
-type FileExplorer = Picker<(PathBuf, bool), (PathBuf, Arc<Theme>)>;
+type FileExplorer = Picker<(PathBuf, bool), (PathBuf, Theme)>;
 
 pub fn file_explorer(root: PathBuf, editor: &Editor) -> Result<FileExplorer, std::io::Error> {
     let directory_content = directory_content(&root, editor)?;
 
     let columns = [PickerColumn::new(
         "path",
-        |(path, is_dir): &(PathBuf, bool), (_root, theme): &(PathBuf, Arc<Theme>)| {
+        |(path, is_dir): &(PathBuf, bool), (_root, theme): &(PathBuf, Theme)| {
             let name = path.file_name();
             // If path is `..` then this will be `None` and signifies being the
             // previous directory, which said another way, is the currently open

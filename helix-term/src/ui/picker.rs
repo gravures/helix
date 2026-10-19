@@ -869,7 +869,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
     fn render_preview(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         const BLOCK: Block<'_> = Block::bordered();
 
-        let theme = cx.editor.theme.as_ref();
+        let theme = &cx.editor.theme;
 
         surface.clear_with(area, cx.editor.theme.get("ui.background"));
 

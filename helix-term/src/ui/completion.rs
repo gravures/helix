@@ -26,10 +26,9 @@ use nucleo::{
 use tui::{buffer::Buffer as Surface, text::Span};
 
 use std::cmp::Reverse;
-use std::sync::Arc;
 
 impl menu::Item for CompletionItem {
-    type Data = Arc<Theme>;
+    type Data = Theme;
 
     fn format(&self, theme: &Self::Data) -> menu::Row<'_> {
         let deprecated = match self {

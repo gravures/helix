@@ -213,7 +213,7 @@ impl<'a> TextRenderer<'a> {
         viewport: Rect,
     ) -> TextRenderer<'a> {
         let config = doc.config.load();
-        let WhitespaceConfig { render } = &config.whitespace;
+        let WhitespaceConfig { render, .. } = &config.whitespace;
 
         let tab_width = doc.tab_width();
 
