@@ -16,8 +16,8 @@ use config::{Configuration, FileType, LanguageConfiguration, LanguageServerConfi
 use foldhash::HashSet;
 use helix_loader::grammar::get_language;
 use helix_stdx::rope::RopeSliceExt as _;
+use once_cell::sync::OnceCell;
 use ropey::RopeSlice;
-use std::sync::OnceLock;
 use tree_house::{
     highlighter,
     query_iter::QueryIter,
@@ -39,25 +39,37 @@ pub use tree_house::{
 #[derive(Debug)]
 pub struct LanguageData {
     config: Arc<LanguageConfiguration>,
-    syntax: OnceLock<Option<SyntaxConfig>>,
-    indent_query: OnceLock<Option<IndentQuery>>,
-    textobject_query: OnceLock<Option<TextObjectQuery>>,
-    tag_query: OnceLock<Option<TagQuery>>,
-    rainbow_query: OnceLock<Option<RainbowQuery>>,
+    syntax: OnceCell<Option<SyntaxConfig>>,
+    indent_query: OnceCell<Option<IndentQuery>>,
+    textobject_query: OnceCell<Option<TextObjectQuery>>,
+    tag_query: OnceCell<Option<TagQuery>>,
+    rainbow_query: OnceCell<Option<RainbowQuery>>,
+}
+
+impl Clone for LanguageData {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            syntax: OnceCell::new(),
+            indent_query: OnceCell::new(),
+            textobject_query: OnceCell::new(),
+            tag_query: OnceCell::new(),
+            rainbow_query: OnceCell::new(),
+        }
+    }
 }
 
 impl LanguageData {
     fn new(config: LanguageConfiguration) -> Self {
         Self {
             config: Arc::new(config),
-            syntax: OnceLock::new(),
-            indent_query: OnceLock::new(),
-            textobject_query: OnceLock::new(),
-            tag_query: OnceLock::new(),
-            rainbow_query: OnceLock::new(),
+            syntax: OnceCell::new(),
+            indent_query: OnceCell::new(),
+            textobject_query: OnceCell::new(),
+            tag_query: OnceCell::new(),
+            rainbow_query: OnceCell::new(),
         }
     }
-
     pub fn config(&self) -> &Arc<LanguageConfiguration> {
         &self.config
     }
@@ -271,14 +283,14 @@ pub fn read_query(lang: &str, query_filename: &str) -> String {
     })
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Loader {
     languages: Vec<LanguageData>,
     languages_by_extension: HashMap<String, Language>,
     languages_by_shebang: HashMap<String, Language>,
     languages_glob_matcher: FileTypeGlobMatcher,
     language_server_configs: HashMap<String, LanguageServerConfiguration>,
-    scopes: ArcSwap<Vec<String>>,
+    scopes: Arc<ArcSwap<Vec<String>>>,
 }
 
 pub type LoaderError = globset::Error;
@@ -317,7 +329,7 @@ impl Loader {
             languages_by_shebang,
             languages_glob_matcher: FileTypeGlobMatcher::new(file_type_globs)?,
             language_server_configs: config.language_server,
-            scopes: ArcSwap::from_pointee(Vec::new()),
+            scopes: Arc::new(ArcSwap::from_pointee(Vec::new())),
         })
     }
 
@@ -403,6 +415,65 @@ impl Loader {
         self.language_for_shebang_marker(marker)
     }
 
+    pub fn update_matchers_and_maps(&mut self) {
+        let mut languages_by_extension = HashMap::new();
+        let mut languages_by_shebang = HashMap::new();
+        let mut file_type_globs = Vec::new();
+
+        for (idx, config) in self.languages.iter().enumerate() {
+            let language = Language(idx as _);
+
+            let config = config.config();
+
+            for file_type in &config.file_types {
+                match file_type {
+                    FileType::Extension(extension) => {
+                        languages_by_extension.insert(extension.clone(), language);
+                    }
+                    FileType::Glob(glob) => {
+                        file_type_globs.push(FileTypeGlob::new(glob.to_owned(), language));
+                    }
+                };
+            }
+            for shebang in &config.shebangs {
+                languages_by_shebang.insert(shebang.clone(), language);
+            }
+        }
+
+        self.languages_by_shebang = languages_by_shebang;
+        self.languages_by_extension = languages_by_extension;
+
+        match FileTypeGlobMatcher::new(file_type_globs) {
+            Ok(m) => {
+                self.languages_glob_matcher = m;
+            }
+            Err(e) => {
+                log::info!("Unable to construct glob matcher: {}", e);
+            }
+        }
+    }
+
+    pub fn language_configs_mut(
+        &mut self,
+    ) -> impl Iterator<Item = &mut Arc<LanguageConfiguration>> {
+        self.languages
+            .iter_mut()
+            .map(|language| &mut language.config)
+    }
+
+    pub fn add_language(&mut self, mut config: LanguageConfiguration) {
+        if config.language.is_none() {
+            config.language = Some(Language(self.languages.len() as u32));
+        }
+        self.languages.push(LanguageData::new(config));
+    }
+
+    pub fn language_server_configs_mut(
+        &mut self,
+    ) -> &mut HashMap<String, LanguageServerConfiguration> {
+        &mut self.language_server_configs
+    }
+
     fn language_for_shebang_marker(&self, marker: RopeSlice) -> Option<Language> {
         let shebang: Cow<str> = marker.into();
         self.languages_by_shebang.get(shebang.as_ref()).copied()
@@ -460,7 +531,7 @@ impl LanguageLoader for Loader {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FileTypeGlob {
     glob: globset::Glob,
     language: Language,
@@ -472,7 +543,7 @@ impl FileTypeGlob {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FileTypeGlobMatcher {
     matcher: globset::GlobSet,
     file_types: Vec<FileTypeGlob>,
