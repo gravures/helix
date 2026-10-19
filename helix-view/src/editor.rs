@@ -1691,7 +1691,7 @@ impl Editor {
         match preview {
             ThemeAction::Preview => {
                 let last_theme = std::mem::replace(&mut self.theme, theme);
-                // only insert on first preview: this will be the last theme the user has saved
+                // Only insert on first preview: this will be the last theme the user has saved
                 self.last_theme.get_or_insert(last_theme);
             }
             ThemeAction::Set => {
@@ -2815,5 +2815,51 @@ impl CursorCache {
 
     pub fn reset(&self) {
         self.0.set(None)
+    }
+}
+
+#[cfg(test)]
+mod legacy_config_tests {
+    use super::*;
+
+    // Guards the restored surface steel and legacy user configs write to.
+    #[test]
+    fn legacy_statusline_separator_and_whitespace_characters_deserialize() {
+        let config: Config = toml::from_str(
+            r#"
+            [statusline]
+            separator = "|"
+
+            [whitespace.characters]
+            space = "·"
+            tab = "→"
+            "#,
+        )
+        .expect("legacy config keys must still deserialize");
+
+        assert_eq!(config.statusline.separator, "|");
+        assert_eq!(config.whitespace.characters.space, '·');
+        assert_eq!(config.whitespace.characters.tab, '→');
+    }
+
+    #[test]
+    fn legacy_separator_and_whitespace_characters_roundtrip() {
+        let config: Config = toml::from_str(
+            r#"
+            [statusline]
+            separator = "|"
+            [whitespace.characters]
+            tab = "»"
+            tabpad = "_"
+            "#,
+        )
+        .unwrap();
+
+        let serialized = toml::to_string(&config).expect("config must serialize");
+        let reparsed: Config = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(reparsed.statusline.separator, "|");
+        assert_eq!(reparsed.whitespace.characters.tab, '»');
+        assert_eq!(reparsed.whitespace.characters.tabpad, '_');
     }
 }

@@ -1116,6 +1116,7 @@ fn force_cquit(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> 
 
 fn theme(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
     let true_color = cx.editor.config.load().true_color || crate::true_color();
+
     match event {
         PromptEvent::Abort => {
             cx.editor.unset_theme_preview()?;
@@ -1130,8 +1131,8 @@ fn theme(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow
                         bail!("Unsupported theme: theme requires true color support");
                     }
                     cx.editor.set_theme_preview(theme)?;
-                };
-            };
+                }
+            }
         }
         PromptEvent::Validate => {
             if let Some(theme_name) = args.first() {
@@ -1151,7 +1152,7 @@ fn theme(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow
                 cx.editor.set_status(name);
             }
         }
-    };
+    }
 
     Ok(())
 }
