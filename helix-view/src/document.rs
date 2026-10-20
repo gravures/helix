@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Error};
-use arc_swap::access::{DynAccess, DynGuard};
+use arc_swap::access::DynAccess;
 use arc_swap::ArcSwap;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
@@ -45,7 +45,6 @@ use helix_core::{
     ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, Syntax, Transaction,
 };
 
-use crate::icons::{Icons, ICONS};
 use crate::{
     editor::Config,
     events::{DocumentDidChange, SelectionDidChange},
@@ -2530,36 +2529,16 @@ impl Document {
             .and_then(|soft_wrap| soft_wrap.max_indent_retain)
             .or(editor_soft_wrap.max_indent_retain)
             .unwrap_or(40);
-
-        let icons: DynGuard<Icons> = ICONS.load();
-        let wrap_icon = icons.ui().r#virtual().wrap();
-        let wrap_indicator = language_soft_wrap
-            .and_then(|soft_wrap| {
-                soft_wrap
-                    .wrap_indicator
-                    .as_ref()
-                    .and_then(|indicator| StackString::try_from(indicator.as_str()).ok())
-            })
-            .or_else(|| wrap_icon.is_user_overridden().then(|| wrap_icon.glyph()))
-            .or_else(|| {
-                editor_soft_wrap
-                    .wrap_indicator
-                    .as_ref()
-                    .and_then(|indicator| StackString::try_from(indicator.as_str()).ok())
-            })
-            .unwrap_or_else(|| wrap_icon.glyph());
-
         let tab_width = self.tab_width() as u16;
-
         TextFormat {
             soft_wrap: enable_soft_wrap && viewport_width > 10,
             tab_width,
             max_wrap: max_wrap.min(viewport_width / 4),
             max_indent_retain: max_indent_retain.min(viewport_width * 2 / 5),
+            wrap_indicator: StackString::from(""),
             // Avoid spinning forever when the window
             // manager sets the size to something tiny
             viewport_width,
-            wrap_indicator,
             wrap_indicator_highlight: theme
                 .and_then(|theme| theme.find_highlight("ui.virtual.wrap")),
             soft_wrap_at_text_width,
