@@ -631,15 +631,14 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
                             if metadata.len() > MAX_FILE_SIZE_FOR_PREVIEW {
                                 return Ok(CachedPreview::LargeFile);
                             }
-                            let content_type = std::fs::File::open(&path).and_then(|file| {
+                            let is_binary = std::fs::File::open(&path).and_then(|file| {
                                 // Read up to 1kb to detect the content type
                                 let n = file.take(1024).read_to_end(&mut self.read_buffer)?;
-                                let content_type =
-                                    content_inspector::inspect(&self.read_buffer[..n]);
+                                let is_binary = crate::is_binary(&self.read_buffer[..n]);
                                 self.read_buffer.clear();
-                                Ok(content_type)
+                                Ok(is_binary)
                             })?;
-                            if content_type.is_binary() {
+                            if is_binary {
                                 return Ok(CachedPreview::Binary);
                             }
                             let mut doc = Document::open(
@@ -1058,17 +1057,22 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
             Event::Key(event) => *event,
             Event::Paste(..) => return self.prompt_handle_event(event, ctx),
             Event::Resize(..) => return EventResult::Consumed(None),
+            // Picker is a modal and should consume mouse events so clicks don't fall
+            // through to the editor underneath
+            Event::Mouse(_) => return EventResult::Consumed(None),
             _ => return EventResult::Ignored(None),
         };
 
         let close_fn = |picker: &mut Self| {
+            let id = picker.id().unwrap_or_else(|| picker.type_name());
+
             // if the picker is very large don't store it as last_picker to avoid
             // excessive memory consumption
             let callback: compositor::Callback =
                 if picker.matcher.snapshot().item_count() > 1_000_000 {
                     Box::new(|compositor: &mut Compositor, _ctx| {
                         // remove the layer
-                        compositor.pop();
+                        compositor.remove(id);
                     })
                 } else {
                     // stop streaming in new items in the background, really we should
@@ -1078,7 +1082,7 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
                     picker.version.fetch_add(1, atomic::Ordering::Relaxed);
                     Box::new(|compositor: &mut Compositor, _ctx| {
                         // remove the layer
-                        compositor.last_picker = compositor.pop();
+                        compositor.last_picker = compositor.remove(id);
                     })
                 };
             EventResult::Consumed(Some(callback))

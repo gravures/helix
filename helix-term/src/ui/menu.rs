@@ -36,6 +36,7 @@ pub struct Menu<T: Item> {
     viewport: (u16, u16),
     recalculate: bool,
     auto_close: bool,
+    layer_id: Option<&'static str>,
 }
 
 impl<T: Item> Menu<T> {
@@ -61,7 +62,17 @@ impl<T: Item> Menu<T> {
             viewport: (0, 0),
             recalculate: true,
             auto_close: false,
+            layer_id: None,
         }
+    }
+
+    pub fn with_layer_id(mut self, layer_id: &'static str) -> Self {
+        self.set_layer_id(layer_id);
+        self
+    }
+
+    pub fn set_layer_id(&mut self, layer_id: &'static str) {
+        self.layer_id = Some(layer_id);
     }
 
     pub fn reset_cursor(&mut self) {
@@ -235,12 +246,24 @@ impl<T: Item + 'static> Component for Menu<T> {
     fn handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
         let event = match event {
             Event::Key(event) => *event,
+            // Menu is a modal and should consume mouse events so clicks don't fall
+            // through to the editor underneath
+            Event::Mouse(_) => return EventResult::Consumed(None),
             _ => return EventResult::Ignored(None),
         };
 
-        let close_fn: Option<Callback> = Some(Box::new(|compositor: &mut Compositor, _| {
+        let layer_id = self.layer_id;
+
+        let close_fn: Option<Callback> = Some(Box::new(move |compositor: &mut Compositor, _| {
             // remove the layer
-            compositor.pop();
+            match layer_id {
+                Some(id) => {
+                    compositor.remove(id);
+                }
+                None => {
+                    compositor.pop();
+                }
+            }
         }));
 
         // Ignore tab key when supertab is turned on in order not to interfere
@@ -311,7 +334,7 @@ impl<T: Item + 'static> Component for Menu<T> {
             // if we run out of options the menu closes itself
             _ if self.auto_close => {
                 (self.callback_fn)(cx.editor, self.selection(), MenuEvent::Abort);
-                return EventResult::Consumed(close_fn);
+                return EventResult::Ignored(close_fn);
             }
             _ => (),
         }
