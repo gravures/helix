@@ -151,6 +151,8 @@ warn = "▲"
 - [x] vertical-buffer: [PR#13430](https://github.com/helix-editor/helix/pull/13430)
 - [x] resizable windows/focus mode: [PR#8546](https://github.com/helix-editor/helix/pull/8546)
 - [x] basics-icons: [PR#12369](https://github.com/helix-editor/helix/pull/12369)
+- [x] render soft-wrap indicators in the gutter: [PR#14825](https://github.com/helix-editor/helix/pull/14825)
+- [x] scrollable file preview: [PR#15854](https://github.com/helix-editor/helix/pull/15854)
 
 ### On The Road
 
@@ -159,13 +161,17 @@ warn = "▲"
 
 ### Planned
 
-- Inline Git Blame: [PR#13133](https://github.com/helix-editor/helix/pull/13133)
-- Code folding: [PR#14593](https://github.com/helix-editor/helix/pull/14593)
-- move selected lines up and down: [PR#14121](https://github.com/helix-editor/helix/pull/14121)
-- render soft-wrap indicators in the gutter: [PR#14825](https://github.com/helix-editor/helix/pull/14825)
-- match in next and previous char pairs: [PR#11695](https://github.com/helix-editor/helix/pull/11695)
-- scrollable file preview: [PR#15854](https://github.com/helix-editor/helix/pull/15854)
-- DAP: fix issue with debugpy corrupting terminal: [PR#15593](https://github.com/helix-editor/helix/pull/15593)
+- [ ] match in next and previous char pairs: [PR#11695](https://github.com/helix-editor/helix/pull/11695)
+- [ ] DAP: fix issue with debugpy corrupting terminal: [PR#15593](https://github.com/helix-editor/helix/pull/15593)
+- [ ] Code folding: [PR#14593](https://github.com/helix-editor/helix/pull/14593)
+
+### Delegated
+
+- [ ] move selected lines up and down: [PR#14121](https://github.com/helix-editor/helix/pull/14121):
+  * PR is stalled with unresolved problematic beavhiours when multi-cursors exists
+  * adds two static commands already defined: move_line_up, move_line_down
+- [ ] Inline Git Blame: [PR#13133](https://github.com/helix-editor/helix/pull/13133):
+  * maybe this could be implemented as a *steel* plugin
 
 ## Other Helix Variants
 
