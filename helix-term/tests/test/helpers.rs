@@ -16,7 +16,6 @@ use helix_view::{
     Editor,
 };
 use tempfile::NamedTempFile;
-use termina::event::{Event, KeyEvent};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 #[cfg(windows)]
@@ -323,6 +322,10 @@ pub fn test_editor_config() -> helix_view::editor::Config {
             level: ImplicitTrustLevelConfig::Insecure,
             ..Default::default()
         },
+        // The steel engine re-runs the Scheme init script on every Application::new
+        // (~25s per test in debug). No test asserts on steel behaviour, so keep it out.
+        #[cfg(feature = "steel")]
+        enable_steel: false,
         ..Default::default()
     }
 }

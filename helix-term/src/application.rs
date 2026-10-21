@@ -420,6 +420,55 @@ impl Application {
                 self.config.store(Arc::new(app_config));
             }
             ConfigEvent::Change => {}
+            ConfigEvent::UpdateField(key, value) => {
+                // Update a single field in the editor config
+                let mut app_config = (*self.config.load().clone()).clone();
+
+                // Use serde_json to navigate and update the nested structure
+                let mut config_json: serde_json::Value = serde_json::to_value(&app_config.editor)
+                    .map_err(|err| {
+                        self.editor
+                            .set_error(format!("Failed to serialize editor config: {}", err));
+                    })
+                    .unwrap_or(serde_json::json!({}));
+
+                // Build the JSON pointer path
+                let pointer = format!("/{}", key.replace('.', "/"));
+
+                if let Some(field) = config_json.pointer_mut(&pointer) {
+                    *field = value;
+                    // Deserialize back to helix_view::editor::Config
+                    match serde_json::from_value::<helix_view::editor::Config>(config_json) {
+                        Ok(mut editor_config) => {
+                            // The JSON round trip drops the custom statusline elements
+                            // registered by steel (`push-status-element!`): they are
+                            // `#[serde(skip)]` and filtered out by the statusline serializer.
+                            // Restore them from the config we are updating, like the steel
+                            // `set-option!` path does (see commands/engine/steel/mod.rs).
+                            editor_config
+                                .statusline
+                                .restore_custom_elements(&app_config.editor.statusline, &key);
+                            app_config.editor = editor_config;
+                            if let Err(err) = self.terminal.reconfigure((&app_config.editor).into())
+                            {
+                                self.editor.set_error(err.to_string());
+                            };
+                            self.config.store(Arc::new(app_config));
+                        }
+                        Err(err) => {
+                            self.editor.set_error(format!(
+                                "Failed to deserialize editor config after updating {}: {}",
+                                key, err
+                            ));
+                            return;
+                        }
+                    }
+                } else {
+                    self.editor
+                        .set_error(format!("Unknown config field: {}", key));
+                    return;
+                }
+            }
             ConfigEvent::ThemeChanged => {
                 let _ = self.terminal.backend_mut().set_background_color(
                     self.editor
