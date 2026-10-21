@@ -439,7 +439,15 @@ impl Application {
                     *field = value;
                     // Deserialize back to helix_view::editor::Config
                     match serde_json::from_value::<helix_view::editor::Config>(config_json) {
-                        Ok(editor_config) => {
+                        Ok(mut editor_config) => {
+                            // The JSON round trip drops the custom statusline elements
+                            // registered by steel (`push-status-element!`): they are
+                            // `#[serde(skip)]` and filtered out by the statusline serializer.
+                            // Restore them from the config we are updating, like the steel
+                            // `set-option!` path does (see commands/engine/steel/mod.rs).
+                            editor_config
+                                .statusline
+                                .restore_custom_elements(&app_config.editor.statusline, &key);
                             app_config.editor = editor_config;
                             if let Err(err) = self.terminal.reconfigure((&app_config.editor).into())
                             {

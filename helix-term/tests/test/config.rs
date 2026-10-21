@@ -125,6 +125,78 @@ async fn test_toggle_config_multi() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Same as [`build_app`], but with a caller-provided editor config — needed to register a steel
+/// custom statusline element, which cannot be expressed in TOML.
+#[cfg(feature = "steel")]
+fn build_app_with_editor(
+    mut editor: helix_view::editor::Config,
+) -> anyhow::Result<helix_term::application::Application> {
+    // Same fork-specific gate as `build_app`: the steel init script costs ~25s per test.
+    editor.enable_steel = false;
+
+    let config = helix_term::config::Config {
+        theme: None,
+        keys: helix_term::keymap::default(),
+        editor,
+    };
+
+    Ok(AppBuilder::new().with_config(config).build()?)
+}
+
+/// Regression test for the fork regression introduced by PR#15860 (F1).
+///
+/// The field-scoped config path (`ConfigEvent::UpdateField`, `helix-term/src/application.rs`)
+/// rebuilds the whole editor config through JSON. The custom statusline elements registered by
+/// steel (`push-status-element!`) are `#[serde(skip)]` and are filtered out by the statusline
+/// serializer, so the round trip drops them — they have to be restored from the config being
+/// updated, like the steel `set-option!` path does. Without that, any `:set-option` /
+/// `:toggle-option` wipes the statusline elements a steel plugin registered.
+#[cfg(feature = "steel")]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_set_option_keeps_custom_statusline_elements() -> anyhow::Result<()> {
+    let mut editor = helix_view::editor::Config::default();
+    editor
+        .statusline
+        .left
+        .push(helix_view::editor::StatusLineElement::Custom(
+            helix_view::extension::steel_implementations::CustomStatusElement {
+                render: std::sync::Arc::new(steel::SteelVal::Void.as_rooted()),
+            },
+        ));
+
+    let mut app = build_app_with_editor(editor)?;
+
+    assert!(
+        app.editor
+            .config
+            .load()
+            .statusline
+            .left
+            .iter()
+            .any(|element| element.is_custom()),
+        "the custom statusline element must be in the config the app starts with"
+    );
+
+    // A `:set-option` on an unrelated field rebuilds the whole config through JSON.
+    app.handle_config_events(ConfigEvent::UpdateField(
+        "trim-final-newlines".into(),
+        serde_json::json!(true),
+    ));
+
+    assert!(
+        app.editor
+            .config
+            .load()
+            .statusline
+            .left
+            .iter()
+            .any(|element| element.is_custom()),
+        "a :set-option must not wipe the steel custom statusline elements"
+    );
+
+    Ok(())
+}
+
 /// The field-scoped config path introduced by PR#15860
 /// (`helix-term/src/application.rs`, `ConfigEvent::UpdateField` arm) serializes the *whole*
 /// editor config to JSON, patches a single field and deserializes it back into
