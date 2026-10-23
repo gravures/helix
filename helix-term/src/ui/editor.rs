@@ -171,7 +171,7 @@ impl EditorView {
             (
                 vec![
                     Span::raw("helix(steel) unstable "),
-                    Span::styled("27.2.0", theme.get("comment")),
+                    Span::styled("27.3.0", theme.get("comment")),
                 ]
                 .into(),
                 Center,
